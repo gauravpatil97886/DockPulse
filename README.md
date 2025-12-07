@@ -1,84 +1,145 @@
 # 🚢 DockPulse
 
-> **Real-time Docker Monitoring TUI**
->
-> <img width="1902" height="958" alt="image" src="https://github.com/user-attachments/assets/471b9908-62ac-4aec-8825-455ba06f82c4" />
+> **Real-Time Docker Monitoring TUI**
 
+---
 
-DockPulse is a powerful **terminal-based dashboard** for monitoring Docker containers in real time.  
-Think of it as:
+## 🖥️ Terminal UI Preview
 
-> **htop + ctop + docker logs + metrics + network + health — all inside one blazing-fast TUI.**
+Here is how **DockPulse looks inside the terminal** when running:
 
-Built with **Golang + TView**, DockPulse provides a smooth, interactive experience directly inside your terminal — no browser, no UI setup, no bloat.
+<img width="1905" height="998" alt="DockPulse Terminal UI" src="https://github.com/user-attachments/assets/eea1de67-0c63-4ad0-9e36-bed19f897e75" />
+
+---
+
+**DockPulse** is a fast, terminal-based dashboard for monitoring and managing Docker containers in real time.
+
+Think of DockPulse as:
+
+> **htop + docker stats + logs + container management — all inside one powerful TUI.**
+
+Built with **Golang** and the **TView TUI library**, DockPulse runs directly in your terminal and provides a smooth, keyboard-driven user experience — no browser, no heavy UI tools.
+
+---
 
 ---
 
 ## ✨ Features
 
-### 📊 Live Metrics
-- CPU & memory usage tracking
-- Real-time ASCII graphs
-- PIDs, Block I/O & Network I/O stats
-- Color-coded health indicators
+### 📊 Live Container Monitoring
+- Real-time CPU usage
+- Memory usage tracking
+- Network I/O statistics
+- Block I/O metrics
+- Health status indicators
+
+---
 
 ### 🐳 Container Management
-- Start / Stop / Restart containers
-- Bulk operations
-- Inspect configs
-- Shell access
-- Delete safely
+- Start containers
+- Stop containers
+- Restart containers
+- Delete stopped containers safely
+- Inspect container configuration
+- Open shell inside containers
 
-### 📜 Streaming Logs
-- True live logs
+---
+
+### 📜 Logs Viewer
+- Live streaming of container logs
 - ANSI color support
-- Toggle **auto-scroll**
-- Scroll & pause historical logs
+- Auto-scroll logs
+- Scroll and pause historical logs
 
-### 🔍 Comparison Mode
-- Compare up to **4 containers** side-by-side
-- CPU & memory bar charts
+---
+
+### 🔄 Bulk Operations
+- Select multiple containers
+- Start / Stop / Restart containers in bulk
+- Bulk delete stopped containers
+
+---
+
+### 🧠 Compare Mode
+- Compare up to **4 containers side-by-side**
+- CPU and Memory usage bars
 - Performance summaries
-- Network & I/O metrics
+- Network & I/O metrics comparison
 
-### 🌐 Network Monitor
-- Port mapping detection
-- Gateway routing
-- Active connections
-- Ping tests & traceroute
+---
 
-### 💾 Volume & Storage Analysis
-- Mounted volume discovery
-- Disk utilization reports
-- Storage type (bind / volume)
+### 🌐 Network Monitoring
+- Real-time network traffic view
+- Container port detection
+- Gateway and routing insights
+- Ping test & traceroute utilities
+
+---
+
+### 💾 Storage & Volume Viewer
+- Detect mounted volumes
+- Disk usage reports
+- Volume type detection (bind / volume)
+
+---
 
 ### 🏥 Health Monitoring
-- CPU/memory threshold alerts
-- Restart counters
-- OOM detection
-- Automatic health scoring
+- CPU & memory threshold warnings
+- Restart tracking
+- OOM event detection
+- Simple health scoring
 
-### 📤 Export Tools
-- Logs
-- Stats
-- Network info
-- Volume snapshots
-- Full comparison CSV exports
+---
+
+### 📤 Data Export
+- Export logs
+- Export stats
+- Export network info
+- Volume snapshot export
+- CSV export for container comparison
 
 ---
 
 ---
 
-## 🖥️ Preview (Terminal UI)
-┌───────────────────────────────────────────────────────────────┐
-│ 🐳 DockPulse │
-├──────────────── Containers ────────────────┬────── Metrics ──┤
-│ 🟢 api-service 0.12% │ CPU ▄▅▆▇█▆▃▁ │
-│ 🟡 postgres-db 42.31% │ MEM ▂▃▄▅▆▇▆▅ │
-│ 🔴 redis-cache Exited │ │
-│ │ Network ↓ ↑ │
-├──────────────── Logs ────────────────────────┴────────────────┤
-│ 2025/12/07 21:02:39 API started │
-│ 2025/12/07 21:02:40 Connected to database │
-│ ... │
-└───────────────────────────────────────────────────────────────┘
+## ⌨️ Keyboard Controls
+
+| Key | Action |
+|------|--------|
+| `↑ ↓` | Navigate containers |
+| `F5` | Refresh values |
+| `l` | View logs |
+| `s` | Start / Stop container |
+| `r` | Restart container |
+| `t` | Open real-time stats |
+| `i` | Inspect container |
+| `e` | Open shell menu |
+| `h` | Health check |
+| `SPACE` | Select container |
+| `b` | Enable bulk mode |
+| `a` | Perform bulk action |
+| `x` | Export logs |
+| `Backspace` | Go back |
+| `q` | Quit application |
+
+---
+
+---
+
+## 🚀 Installation
+
+### Requirements
+
+- Docker installed & running
+- Go **1.21+**
+- Linux / macOS terminal
+
+---
+
+### Build & Run
+
+```bash
+git clone https://github.com/gauravpatil97886/DockPulse.git
+cd DockPulse
+go mod tidy
+go run ./cmd/dashboard
