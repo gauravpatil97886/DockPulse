@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Docker Manager UI Preview</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: #fff;
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+
+        .subtitle {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #ffd700;
+            font-size: 1.2em;
+        }
+
+        .terminal-window {
+            background: #1a1a2e;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        .terminal-header {
+            background: #16213e;
+            padding: 10px 15px;
+            display: flex;
+            align-items: center;
+            border-bottom: 2px solid #0f4c75;
+        }
+
+        .terminal-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .btn-close { background: #ff5f56; }
+        .btn-minimize { background: #ffbd2e; }
+        .btn-maximize { background: #27c93f; }
+
+        .terminal-title {
+            margin-left: 15px;
+            color: #00d9ff;
+            font-weight: bold;
+        }
+
+        .terminal-body {
+            padding: 20px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .dashboard-layout {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .panel {
+            background: #0f3460;
+            border: 2px solid #00d9ff;
+            border-radius: 8px;
+            padding: 15px;
+        }
+
+        .panel-title {
+            color: #00d9ff;
+            font-weight: bold;
+            margin-bottom: 10px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #00d9ff;
+        }
+
+        .container-item {
+            padding: 8px;
+            margin: 5px 0;
+            background: #16213e;
+            border-radius: 5px;
+            border-left: 3px solid #27c93f;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .container-item.stopped {
+            border-left-color: #ff5f56;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .status-running { background: #27c93f; }
+        .status-stopped { background: #ff5f56; }
+
+        .stat-bar {
+            margin: 10px 0;
+        }
+
+        .stat-label {
+            color: #00d9ff;
+            margin-bottom: 3px;
+        }
+
+        .progress-bar {
+            background: #16213e;
+            height: 20px;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #27c93f 0%, #00d9ff 100%);
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .progress-fill.high {
+            background: linear-gradient(90deg, #ff5f56 0%, #ffbd2e 100%);
+        }
+
+        .sparkline {
+            color: #00d9ff;
+            letter-spacing: 1px;
+            font-size: 16px;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+
+        .feature-card {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 10px;
+            padding: 20px;
+            border: 1px solid rgba(255,255,255,0.2);
+            transition: transform 0.3s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            border-color: #00d9ff;
+        }
+
+        .feature-icon {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .feature-title {
+            font-size: 1.3em;
+            margin-bottom: 10px;
+            color: #ffd700;
+        }
+
+        .feature-desc {
+            color: #e0e0e0;
+            line-height: 1.6;
+        }
+
+        .keyboard-shortcuts {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .shortcut {
+            background: rgba(255,255,255,0.1);
+            padding: 10px 15px;
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .key {
+            background: #16213e;
+            padding: 5px 10px;
+            border-radius: 5px;
+            border: 2px solid #00d9ff;
+            font-weight: bold;
+            color: #00d9ff;
+            min-width: 30px;
+            text-align: center;
+        }
+
+        .action {
+            flex: 1;
+        }
+
+        .demo-container {
+            margin: 20px 0;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .live-indicator {
+            display: inline-block;
+            color: #27c93f;
+            animation: pulse 2s infinite;
+        }
+
+        .bulk-mode-indicator {
+            background: #ff00ff;
+            color: #fff;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-weight: bold;
+            display: inline-block;
+            margin: 5px 0;
+        }
+
+        .checkbox {
+            display: inline-block;
+            width: 15px;
+            height: 15px;
+            border: 2px solid #00d9ff;
+            border-radius: 3px;
+            margin-right: 8px;
+        }
+
+        .checkbox.checked {
+            background: #27c93f;
+            border-color: #27c93f;
+        }
+
+        .checkbox.checked::after {
+            content: '✓';
+            color: #fff;
+            font-size: 12px;
+            display: block;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🐳 Docker Container Manager</h1>
+        <div class="subtitle">Professional TUI with Advanced Features</div>
+
+        <!-- Main Dashboard Preview -->
+        <div class="terminal-window">
+            <div class="terminal-header">
+                <div class="terminal-buttons">
+                    <div class="btn btn-close"></div>
+                    <div class="btn btn-minimize"></div>
+                    <div class="btn btn-maximize"></div>
+                </div>
+                <div class="terminal-title">Docker Container Manager</div>
+            </div>
+            <div class="terminal-body">
+                <div class="dashboard-layout">
+                    <!-- Container List -->
+                    <div class="panel">
+                        <div class="panel-title">🐳 Docker Containers</div>
+                        <div class="container-item">
+                            <span class="status-dot status-running"></span>
+                            <span>🟢 nginx_web</span>
+                            <span style="color: #888; margin-left: auto;">a1b2c3d4e5f6 | Up 2 hours</span>
+                        </div>
+                        <div class="container-item">
+                            <span class="status-dot status-running"></span>
+                            <span>🟢 postgres_db</span>
+                            <span style="color: #888; margin-left: auto;">f6e5d4c3b2a1 | Up 5 hours</span>
+                        </div>
+                        <div class="container-item stopped">
+                            <span class="status-dot status-stopped"></span>
+                            <span>🔴 redis_cache</span>
+                            <span style="color: #888; margin-left: auto;">1a2b3c4d5e6f | Exited (0) 3 hours ago</span>
+                        </div>
+                        <div class="container-item">
+                            <span class="status-dot status-running"></span>
+                            <span>🟢 api_server</span>
+                            <span style="color: #888; margin-left: auto;">6f5e4d3c2b1a | Up 1 hour</span>
+                        </div>
+                    </div>
+
+                    <!-- Stats & Info Panel -->
+                    <div>
+                        <div class="panel" style="margin-bottom: 15px;">
+                            <div class="panel-title">📊 Container Details</div>
+                            <div style="color: #ffd700; margin-bottom: 5px;">Container Name:</div>
+                            <div style="margin-bottom: 10px;">nginx_web</div>
+                            <div style="color: #00d9ff; margin-bottom: 5px;">Container ID:</div>
+                            <div style="margin-bottom: 10px;">a1b2c3d4e5f6</div>
+                            <div style="color: #27c93f; margin-bottom: 5px;">Status:</div>
+                            <div>Up 2 hours</div>
+                        </div>
+
+                        <div class="panel">
+                            <div class="panel-title">📈 Live Stats <span class="live-indicator">●</span></div>
+                            <div class="stat-bar">
+                                <div class="stat-label">CPU Usage: 23.4%</div>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" style="width: 23.4%;">23.4%</div>
+                                </div>
+                                <div class="sparkline">▁▂▃▄▅▄▃▅▆▇▆▅▄▃▂▃▄▅▆▅▄▃▂</div>
+                            </div>
+                            <div class="stat-bar">
+                                <div class="stat-label">Memory: 45.2%</div>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" style="width: 45.2%;">45.2%</div>
+                                </div>
+                                <div class="sparkline">▂▃▃▄▄▅▅▆▆▇▇▆▆▅▅▄▄▃▃▂▂▃▃</div>
+                            </div>
+                            <div style="margin-top: 10px; color: #888;">
+                                Network I/O: ↓ 1.2 MB / ↑ 456 KB<br>
+                                Block I/O: ↓ 234 KB / ↑ 89 KB
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Keyboard Shortcuts -->
+                <div class="panel">
+                    <div class="panel-title">⚡ Quick Actions</div>
+                    <div class="keyboard-shortcuts">
+                        <div class="shortcut">
+                            <span class="key">l</span>
+                            <span class="action">View Logs</span>
+                        </div>
+                        <div class="shortcut">
+                            <span class="key">L</span>
+                            <span class="action">Advanced Logs</span>
+                        </div>
+                        <div class="shortcut">
+                            <span class="key">s</span>
+                            <span class="action">Start/Stop</span>
+                        </div>
+                        <div class="shortcut">
+                            <span class="key">r</span>
+                            <span class="action">Restart</span>
+                        </div>
+                        <div class="shortcut">
+                            <span class="key">t</span>
+                            <span class="action">Stats</span>
+                        </div>
+                        <div class="shortcut">
+                            <span class="key">i</span>
+                            <span class="action">Inspect</span>
+                        </div>
+                        <div class="shortcut">
+                            <span class="key">e</span>
+                            <span class="action">Shell</span>
+                        </div>
+                        <div class="shortcut">
+                            <span class="key">d</span>
+                            <span class="action">Delete</span>
+                        </div>
+                        <div class="shortcut">
+                            <span class="key">b</span>
+                            <span class="action">Bulk Mode</span>
+                        </div>
+                        <div class="shortcut">
+                            <span class="key">SPACE</span>
+                            <span class="action">Select</span>
+                        </div>
+                        <div class="shortcut">
+                            <span class="key">a</span>
+                            <span class="action">Bulk Actions</span>
+                        </div>
+                        <div class="shortcut">
+                            <span class="key">q</span>
+                            <span class="action">Quit</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bulk Mode Demo -->
+        <div class="terminal-window">
+            <div class="terminal-header">
+                <div class="terminal-buttons">
+                    <div class="btn btn-close"></div>
+                    <div class="btn btn-minimize"></div>
+                    <div class="btn btn-maximize"></div>
+                </div>
+                <div class="terminal-title">Bulk Operations Mode</div>
+            </div>
+            <div class="terminal-body">
+                <div class="bulk-mode-indicator">🎯 BULK MODE ACTIVE (3 selected)</div>
+                <div class="panel" style="margin-top: 15px;">
+                    <div class="panel-title">Select Multiple Containers</div>
+                    <div class="container-item">
+                        <span class="checkbox checked"></span>
+                        <span class="status-dot status-running"></span>
+                        <span>🟢 nginx_web</span>
+                    </div>
+                    <div class="container-item">
+                        <span class="checkbox checked"></span>
+                        <span class="status-dot status-running"></span>
+                        <span>🟢 postgres_db</span>
+                    </div>
+                    <div class="container-item stopped">
+                        <span class="checkbox"></span>
+                        <span class="status-dot status-stopped"></span>
+                        <span>🔴 redis_cache</span>
+                    </div>
+                    <div class="container-item">
+                        <span class="checkbox checked"></span>
+                        <span class="status-dot status-running"></span>
+                        <span>🟢 api_server</span>
+                    </div>
+                </div>
+                <div style="margin-top: 15px; padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px;">
+                    <div style="color: #ffd700; font-weight: bold; margin-bottom: 10px;">Bulk Actions Available:</div>
+                    <div>• 🟢 Start All - Start all selected containers</div>
+                    <div>• 🔴 Stop All - Stop all selected containers</div>
+                    <div>• 🔄 Restart All - Restart all selected containers</div>
+                    <div>• 🗑️ Delete All - Remove all selected containers</div>
+                    <div>• 📋 Export Logs - Save logs from all selected</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Features Grid -->
+        <div class="feature-grid">
+            <div class="feature-card">
+                <div class="feature-icon">📊</div>
+                <div class="feature-title">Real-Time Stats</div>
+                <div class="feature-desc">
+                    Live CPU, memory, network, and disk I/O monitoring with beautiful sparkline graphs. Historical data tracking with averages and maximums.
+                </div>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🔍</div>
+                <div class="feature-title">Advanced Log Viewer</div>
+                <div class="feature-desc">
+                    Search logs with regex, filter by level (ERROR/WARN/INFO), case-sensitive matching, syntax highlighting, and export capabilities.
+                </div>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">💻</div>
+                <div class="feature-title">Interactive Shell</div>
+                <div class="feature-desc">
+                    Execute commands inside containers with command history, quick command presets, and real-time output display.
+                </div>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🎯</div>
+                <div class="feature-title">Bulk Operations</div>
+                <div class="feature-desc">
+                    Select multiple containers and perform batch operations: start, stop, restart, delete, or export logs from many containers at once.
+                </div>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🏥</div>
+                <div class="feature-title">Health Checks</div>
+                <div class="feature-desc">
+                    Monitor container health with responsive checks, disk usage monitoring, and memory usage tracking.
+                </div>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">📦</div>
+                <div class="feature-title">Export Logs</div>
+                <div class="feature-desc">
+                    Export logs from single or multiple containers to files with timestamps for easy debugging and archival.
+                </div>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🎨</div>
+                <div class="feature-title">Beautiful UI</div>
+                <div class="feature-desc">
+                    Color-coded status indicators, syntax highlighting, progress bars, sparkline graphs, and intuitive navigation.
+                </div>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">⚡</div>
+                <div class="feature-title">Fast & Efficient</div>
+                <div class="feature-desc">
+                    Auto-refresh intervals, background workers, concurrent operations, and optimized rendering for smooth performance.
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div style="text-align: center; margin-top: 40px; padding: 20px; color: #888;">
+            <p style="font-size: 1.2em; margin-bottom: 10px;">🚀 Ready to manage your Docker containers like a pro?</p>
+            <p>Follow the implementation guide to get started!</p>
+        </div>
+    </div>
+
+    <script>
+        // Animate progress bars
+        function animateStats() {
+            const cpuBar = document.querySelector('.progress-fill');
+            const sparklines = document.querySelectorAll('.sparkline');
+            
+            setInterval(() => {
+                const newCpu = Math.random() * 30 + 20;
+                cpuBar.style.width = newCpu + '%';
+                cpuBar.textContent = newCpu.toFixed(1) + '%';
+                
+                // Update sparklines
+                sparklines.forEach(sparkline => {
+                    const blocks = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+                    let newSparkline = sparkline.textContent.slice(1);
+                    newSparkline += blocks[Math.floor(Math.random() * blocks.length)];
+                    sparkline.textContent = newSparkline;
+                });
+            }, 2000);
+        }
+
+        animateStats();
+    </script>
+</body>
+</html>
