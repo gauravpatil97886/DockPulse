@@ -22,8 +22,6 @@ Built with **Golang** and the **TView TUI library**, DockPulse runs directly in 
 
 ---
 
----
-
 ## ✨ Features
 
 ### 📊 Live Container Monitoring
@@ -62,7 +60,7 @@ Built with **Golang** and the **TView TUI library**, DockPulse runs directly in 
 
 ### 🧠 Compare Mode
 - Compare up to **4 containers side-by-side**
-- CPU and Memory usage bars
+- CPU and memory usage bars
 - Performance summaries
 - Network & I/O metrics comparison
 
@@ -95,8 +93,8 @@ Built with **Golang** and the **TView TUI library**, DockPulse runs directly in 
 - Export logs
 - Export stats
 - Export network info
-- Volume snapshot export
-- CSV export for container comparison
+- Volume snapshots
+- CSV export for container comparisons
 
 ---
 
@@ -105,7 +103,7 @@ Built with **Golang** and the **TView TUI library**, DockPulse runs directly in 
 ## ⌨️ Keyboard Controls
 
 | Key | Action |
-|------|--------|
+|------|----------|
 | `↑ ↓` | Navigate containers |
 | `F5` | Refresh values |
 | `l` | View logs |
@@ -126,20 +124,14 @@ Built with **Golang** and the **TView TUI library**, DockPulse runs directly in 
 
 ---
 
-## 🚀 Installation
+## 🐳 Run DockPulse using Docker (Recommended)
 
-### Requirements
+DockPulse is available as a **public Docker image** and is **FREE to use**.  
+You do **not** need to install Go — Docker is enough.
 
-- Docker installed & running
-- Go **1.21+**
-- Linux / macOS terminal
-
----
-
-### Build & Run
+### ▶️ Run with a single command
 
 ```bash
-git clone https://github.com/gauravpatil97886/DockPulse.git
-cd DockPulse
-go mod tidy
-go run ./cmd/dashboard
+docker run -it --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  gauravsde/dockpulse
