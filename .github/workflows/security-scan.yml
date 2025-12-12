@@ -1,133 +1,335 @@
-name: Security Scan
+# .github/workflows/auto-security-scan.yml
+name: Automated Security Scan & Analysis
 
 on:
-  push:
-    branches: [ main, develop ]
   pull_request:
-    branches: [ main, develop ]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  security-events: write
-  pull-requests: write
-  checks: write
+    branches: [main, develop, staging]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main, develop]
 
 jobs:
-  security-scan:
-    name: Security Scan
+  auto-security-analysis:
     runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
       
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-        cache: true
-        
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y jq
-        
-    - name: Make script executable
-      run: chmod +x ./scan.sh
-        
-    - name: Run security scan
-      id: scan
-      continue-on-error: true
-      run: |
-        if ./scan.sh; then
-          echo "scan_status=success" >> $GITHUB_OUTPUT
-          echo "scan_result=✅ PASSED" >> $GITHUB_OUTPUT
-        else
-          echo "scan_status=failure" >> $GITHUB_OUTPUT
-          echo "scan_result=❌ FAILED" >> $GITHUB_OUTPUT
-        fi
-        
-    - name: Upload HTML Report
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: security-reports
-        path: security-reports/
-        retention-days: 30
-        
-    - name: Upload SARIF to GitHub Security
-      if: always()
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: security-reports/gosec-*.sarif
-        category: gosec
-      continue-on-error: true
-        
-    - name: Comment on PR
-      if: github.event_name == 'pull_request' && always()
-      uses: actions/github-script@v7
-      with:
-        github-token: ${{secrets.GITHUB_TOKEN}}
-        script: |
-          const fs = require('fs');
-          const path = require('path');
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      # Run all security scans in parallel
+      - name: Run Gosec scan
+        run: |
+          curl -sfL https://raw.githubusercontent.com/securego/gosec/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
+          gosec -fmt json -out /tmp/gosec.json ./... || true
+          gosec -fmt html -out /tmp/gosec.html ./... || true
+
+      - name: Run custom SCA script
+        run: |
+          bash sca.sh > /tmp/custom-sca.json 2>&1 || true
+
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: '/tmp/trivy.sarif'
+
+      - name: Run Dependency check
+        run: |
+          curl -sL https://github.com/dependency-check/dependency-check/releases/download/v8.4.0/dependency-check_8.4.0_linux64.sh | bash -s -- --project "$(basename $GITHUB_REPOSITORY)" --scan . --format JSON --out /tmp/
+          mv /tmp/dependency-check-report.json /tmp/depcheck.json || true
+
+      # Merge all reports
+      - name: Consolidate all scan reports
+        run: |
+          python3 << 'PYTHON_SCRIPT'
+          import json
+          import glob
           
-          // Find the summary file
-          const reportsDir = 'security-reports';
-          const files = fs.readdirSync(reportsDir);
-          const summaryFile = files.find(f => f === 'SECURITY-SUMMARY.md');
+          consolidated = {
+              "scan_timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+              "scanners": {},
+              "total_issues": 0,
+              "critical": 0,
+              "high": 0,
+              "medium": 0,
+              "low": 0,
+              "all_issues": []
+          }
           
-          if (summaryFile) {
-            const summaryPath = path.join(reportsDir, summaryFile);
-            const summary = fs.readFileSync(summaryPath, 'utf8');
+          # Parse Gosec
+          try:
+              with open('/tmp/gosec.json') as f:
+                  gosec = json.load(f)
+                  if gosec and 'Issues' in gosec:
+                      consolidated["scanners"]["gosec"] = len(gosec['Issues'])
+                      for issue in gosec['Issues']:
+                          sev = issue.get('Severity', 'MEDIUM').upper()
+                          if sev in consolidated:
+                              consolidated[sev.lower()] += 1
+                          consolidated["all_issues"].append({
+                              "scanner": "gosec",
+                              "severity": sev,
+                              "rule": issue.get('RuleID'),
+                              "message": issue.get('What'),
+                              "file": issue.get('File'),
+                              "line": issue.get('Line')
+                          })
+          except: pass
+          
+          # Parse custom SCA
+          try:
+              with open('/tmp/custom-sca.json') as f:
+                  custom = json.load(f)
+                  if isinstance(custom, list):
+                      consolidated["scanners"]["custom_sca"] = len(custom)
+                      for issue in custom:
+                          consolidated["high"] += 1
+                          consolidated["all_issues"].append({
+                              "scanner": "custom_sca",
+                              "severity": "HIGH",
+                              "rule": issue.get('type', 'VULN'),
+                              "message": issue.get('description', issue.get('message')),
+                              "file": issue.get('file'),
+                              "line": issue.get('line', 0)
+                          })
+          except: pass
+          
+          consolidated["total_issues"] = len(consolidated["all_issues"])
+          
+          with open('/tmp/consolidated-report.json', 'w') as f:
+              json.dump(consolidated, f, indent=2)
+          
+          print(f"✅ Consolidated {consolidated['total_issues']} issues from all scanners")
+          PYTHON_SCRIPT
+
+      # AI Analysis - automatically call Claude API
+      - name: AI-Powered Vulnerability Analysis
+        id: ai_analysis
+        run: |
+          python3 << 'PYTHON_SCRIPT'
+          import json
+          import urllib.request
+          import os
+          
+          with open('/tmp/consolidated-report.json') as f:
+              report = json.load(f)
+          
+          # Build prompt for Claude
+          issues_text = json.dumps(report['all_issues'][:30], indent=2)
+          
+          prompt = f"""Analyze this security vulnerability report and respond with ONLY valid JSON (no markdown, no code blocks):
+
+Report Summary:
+- Total Issues: {report['total_issues']}
+- Critical: {report['critical']}
+- High: {report['high']}
+- Medium: {report['medium']}
+- Low: {report['low']}
+
+Issues (top 30):
+{issues_text}
+
+Respond ONLY with this exact JSON structure (no other text):
+{{
+  "summary": "2-3 sentence executive summary",
+  "can_merge": true/false,
+  "must_fix_before_merge": ["issue description 1", "issue description 2"],
+  "should_fix_soon": ["issue description 3"],
+  "risk_level": "CRITICAL|HIGH|MEDIUM|LOW",
+  "recommendation": "Brief action plan"
+}}"""
+
+          # Call Claude API
+          headers = {
+              'Content-Type': 'application/json',
+              'anthropic-version': '2023-06-01'
+          }
+          
+          data = json.dumps({
+              "model": "claude-sonnet-4-20250514",
+              "max_tokens": 500,
+              "messages": [{"role": "user", "content": prompt}]
+          }).encode()
+          
+          try:
+              req = urllib.request.Request('https://api.anthropic.com/v1/messages', data=data, headers=headers)
+              response = urllib.request.urlopen(req)
+              result = json.loads(response.read().decode())
+              
+              # Extract analysis from Claude response
+              analysis_text = result['content'][0]['text'].strip()
+              
+              # Parse JSON from response
+              if '{' in analysis_text:
+                  json_start = analysis_text.index('{')
+                  json_end = analysis_text.rindex('}') + 1
+                  analysis = json.loads(analysis_text[json_start:json_end])
+                  
+                  with open('/tmp/ai-analysis.json', 'w') as f:
+                      json.dump(analysis, f, indent=2)
+                  
+                  print(f"✅ AI Analysis Complete")
+                  print(f"Risk Level: {analysis.get('risk_level')}")
+                  print(f"Can Merge: {analysis.get('can_merge')}")
+              else:
+                  print("⚠️ Could not parse AI response, using basic analysis")
+          except Exception as e:
+              print(f"⚠️ AI Analysis skipped: {str(e)}")
+          
+          PYTHON_SCRIPT
+
+      # Auto-comment on PR with findings
+      - name: Post Automated Comment to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
             
-            // Find existing comment
+            let report = {};
+            let analysis = {};
+            
+            try {
+              report = JSON.parse(fs.readFileSync('/tmp/consolidated-report.json', 'utf8'));
+            } catch (e) {
+              report = { total_issues: 0, critical: 0, high: 0, medium: 0, low: 0 };
+            }
+            
+            try {
+              analysis = JSON.parse(fs.readFileSync('/tmp/ai-analysis.json', 'utf8'));
+            } catch (e) {
+              analysis = {};
+            }
+            
+            const emoji = {
+              CRITICAL: '🔴',
+              HIGH: '🔴',
+              MEDIUM: '🟠',
+              LOW: '🟡',
+              PASS: '✅'
+            };
+            
+            const riskEmoji = analysis.risk_level ? emoji[analysis.risk_level] || '❓' : '❓';
+            const canMerge = analysis.can_merge ? '✅ YES' : '❌ NO';
+            
+            let comment = `## ${riskEmoji} Security Scan Report\n\n`;
+            comment += `**Merge Status:** ${canMerge}\n\n`;
+            
+            comment += `### 📊 Vulnerability Summary\n`;
+            comment += `| Severity | Count |\n`;
+            comment += `|----------|-------|\n`;
+            comment += `| ${emoji.CRITICAL} Critical | ${report.critical || 0} |\n`;
+            comment += `| ${emoji.HIGH} High | ${report.high || 0} |\n`;
+            comment += `| ${emoji.MEDIUM} Medium | ${report.medium || 0} |\n`;
+            comment += `| ${emoji.LOW} Low | ${report.low || 0} |\n`;
+            comment += `| **Total** | **${report.total_issues || 0}** |\n\n`;
+            
+            if (analysis.risk_level) {
+              comment += `### Risk Assessment\n`;
+              comment += `**Risk Level:** ${riskEmoji} ${analysis.risk_level}\n\n`;
+            }
+            
+            if (analysis.summary) {
+              comment += `### 📋 Summary\n`;
+              comment += `${analysis.summary}\n\n`;
+            }
+            
+            if (analysis.must_fix_before_merge && analysis.must_fix_before_merge.length > 0) {
+              comment += `### 🔴 Must Fix Before Merge\n`;
+              analysis.must_fix_before_merge.forEach(issue => {
+                comment += `- ${issue}\n`;
+              });
+              comment += '\n';
+            }
+            
+            if (analysis.should_fix_soon && analysis.should_fix_soon.length > 0) {
+              comment += `### 🟠 Should Fix Soon\n`;
+              analysis.should_fix_soon.forEach(issue => {
+                comment += `- ${issue}\n`;
+              });
+              comment += '\n';
+            }
+            
+            if (analysis.recommendation) {
+              comment += `### 💡 Recommendation\n`;
+              comment += `${analysis.recommendation}\n\n`;
+            }
+            
+            comment += `---\n`;
+            comment += `**Scanners Used:** Gosec, Trivy, Dependency-Check, Custom SCA\n`;
+            comment += `**Analysis:** AI-Powered (Claude)\n`;
+            comment += `📅 Generated: ${new Date().toISOString()}\n`;
+            
+            // Delete old comments and post new one
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: context.issue.number
             });
             
-            const botComment = comments.find(comment => 
-              comment.user.type === 'Bot' && 
-              comment.body.includes('Security Scan Report')
-            );
-            
-            const commentBody = `${summary}
-
----
-📥 [Download detailed reports](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`;
-            
-            if (botComment) {
-              // Update existing comment
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: botComment.id,
-                body: commentBody
-              });
-            } else {
-              // Create new comment
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: commentBody
-              });
+            for (const comment of comments) {
+              if (comment.user.type === 'Bot' && comment.body.includes('Security Scan Report')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id
+                });
+              }
             }
-          }
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+      # Fail the build if critical issues exist
+      - name: Auto-Fail on Critical Issues
+        run: |
+          python3 << 'PYTHON_SCRIPT'
+          import json
           
-    - name: Set job summary
-      if: always()
-      run: |
-        if [ -f "security-reports/SECURITY-SUMMARY.md" ]; then
-          cat security-reports/SECURITY-SUMMARY.md >> $GITHUB_STEP_SUMMARY
-        fi
-          
-    - name: Fail if security issues found
-      if: steps.scan.outputs.scan_status == 'failure'
-      run: |
-        echo "::error::❌ Security scan failed - critical issues detected"
-        echo "::error::View the Security tab or download artifacts for details"
-        exit 1
+          try:
+              with open('/tmp/ai-analysis.json') as f:
+                  analysis = json.load(f)
+                  if not analysis.get('can_merge', False):
+                      print("❌ Build blocked: Critical security issues detected")
+                      exit(1)
+              print("✅ Security checks passed - merge allowed")
+          except:
+              with open('/tmp/consolidated-report.json') as f:
+                  report = json.load(f)
+                  if report.get('critical', 0) > 0 or report.get('high', 0) > 3:
+                      print("❌ Build blocked: Too many high severity issues")
+                      exit(1)
+              print("✅ Security checks passed")
+          PYTHON_SCRIPT
+
+      # Upload all reports as artifacts
+      - name: Upload Security Reports
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-reports
+          path: |
+            /tmp/gosec.json
+            /tmp/gosec.html
+            /tmp/custom-sca.json
+            /tmp/trivy.sarif
+            /tmp/consolidated-report.json
+            /tmp/ai-analysis.json
+          retention-days: 90

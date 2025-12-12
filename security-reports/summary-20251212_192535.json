@@ -1,0 +1,35 @@
+{
+  "scan_timestamp": "2025-12-12T13:55:45Z",
+  "project_name": "devops-dashboard-2",
+  "project_directory": "/home/choice/Downloads/Projects/devops-dashboard-2",
+  "ci_environment": false,
+  "overall_status": "PASSED",
+  "total_critical_issues": 0,
+  "summary": {
+    "vulnerabilities": {
+      "tool": "govulncheck",
+      "count": 0,
+      "status": "PASSED"
+    },
+    "security_issues": {
+      "tool": "gosec",
+      "count": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 0,
+      "status": "PASSED"
+    },
+    "code_quality": {
+      "tool": "golangci-lint",
+      "count": 0,
+      "status": "PASSED"
+    }
+  },
+  "reports": {
+    "gosec_json": "",
+    "gosec_html": "",
+    "gosec_sarif": "",
+    "govulncheck_json": "",
+    "golangci_lint_json": ""
+  }
+}

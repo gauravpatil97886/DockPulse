@@ -1,483 +1,675 @@
 #!/bin/bash
 
 # ==========================================
-# Fast Security Scanning Script
+# Enhanced Security Scanning Script
+# ==========================================
+# Features:
+# - Multiple security scanners (govulncheck, gosec, golangci-lint, trivy)
+# - CI/CD friendly (GitHub Actions, GitLab)
+# - JSON output for AI analysis
+# - Auto-retry for network failures
+# - Improved error handling
+# - Concurrent scanning
 # ==========================================
 
-# Color codes for output
+set -euo pipefail
+
+# ==========================================
+# Color codes
+# ==========================================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Configuration variables
-REPORT_DIR="security-reports"
+# ==========================================
+# Configuration
+# ==========================================
+REPORT_DIR="${REPORT_DIR:-security-reports}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-PROJECT_NAME="${PROJECT_NAME:-Go Project}"
+PROJECT_NAME="${PROJECT_NAME:-$(basename "$(pwd)")}"
+PROJECT_DIR="$(pwd)"
+CI_MODE="${CI_MODE:-false}"
+PARALLEL_JOBS=3
+RETRY_COUNT=3
+RETRY_DELAY=2
 
-# Enable strict mode
-set -euo pipefail
+# Detect CI environment
+if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ] || [ -n "${GITLAB_CI:-}" ]; then
+  CI_MODE=true
+  echo "🤖 CI environment detected"
+fi
+
+# ==========================================
+# Helper Functions
+# ==========================================
+
+log_info() {
+  echo -e "${BLUE}ℹ️  $*${NC}"
+}
+
+log_success() {
+  echo -e "${GREEN}✅ $*${NC}"
+}
+
+log_warning() {
+  echo -e "${YELLOW}⚠️  $*${NC}"
+}
+
+log_error() {
+  echo -e "${RED}❌ $*${NC}"
+}
+
+log_header() {
+  echo ""
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${CYAN}$*${NC}"
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+}
+
+# Retry function for network operations
+retry_command() {
+  local cmd=$1
+  local attempt=1
+  
+  while [ $attempt -le $RETRY_COUNT ]; do
+    if eval "$cmd"; then
+      return 0
+    fi
+    
+    if [ $attempt -lt $RETRY_COUNT ]; then
+      log_warning "Attempt $attempt failed. Retrying in ${RETRY_DELAY}s..."
+      sleep $RETRY_DELAY
+    fi
+    attempt=$((attempt + 1))
+  done
+  
+  log_error "Command failed after $RETRY_COUNT attempts: $cmd"
+  return 1
+}
 
 # ==========================================
 # Validation
 # ==========================================
 
-# Check if go.mod exists in current directory
-if [ ! -f "go.mod" ]; then
-  echo -e "${RED}❌ Error: go.mod not found in current directory${NC}"
-  echo -e "${YELLOW}Please run this script from your project root directory where go.mod is located.${NC}"
-  echo -e "${BLUE}Current directory: $(pwd)${NC}"
-  exit 1
-fi
-
-echo -e "${GREEN}✓ Found go.mod in $(pwd)${NC}"
-
-# Get the absolute path of the project directory
-PROJECT_DIR="$(pwd)"
-echo -e "${BLUE}Project directory: $PROJECT_DIR${NC}"
-
-# Function to ensure we're in the project directory
-ensure_project_dir() {
-  if [ "$(pwd)" != "$PROJECT_DIR" ]; then
-    echo -e "${YELLOW}⚠️  Directory changed, returning to project root: $PROJECT_DIR${NC}"
-    cd "$PROJECT_DIR" || exit 1
+validate_environment() {
+  log_header "Validating Environment"
+  
+  if [ ! -f "go.mod" ]; then
+    log_error "go.mod not found in current directory: $(pwd)"
+    echo "Please run this script from your Go project root directory."
+    exit 1
   fi
+  
+  log_success "Found go.mod"
+  log_success "Project directory: $PROJECT_DIR"
+  
+  # Check for required tools
+  check_command() {
+    if ! command -v "$1" &> /dev/null; then
+      log_warning "$1 not found - will attempt installation"
+      return 1
+    fi
+    return 0
+  }
+  
+  check_command "go" || exit 1
+  log_success "Go compiler found: $(go version)"
 }
 
 # ==========================================
 # Setup
 # ==========================================
 
-echo -e "${BLUE}📦 Setting up security scanning environment...${NC}"
-
-# Ensure we're in project directory
-ensure_project_dir
-
-# Remove old report directory completely and create fresh one
-echo -e "${BLUE}🧹 Cleaning up old reports...${NC}"
-rm -rf "$REPORT_DIR"
-mkdir -p "$REPORT_DIR"
-
-# Clean up old reports from root directory
-rm -f gosec-report.json govuln-report.txt gosec-report.html
-echo -e "${GREEN}✓ Cleanup complete - fresh start${NC}"
-
-# Install security tools
-echo -e "${BLUE}🔧 Installing security tools...${NC}"
-go install golang.org/x/vuln/cmd/govulncheck@latest
-go install github.com/securego/gosec/v2/cmd/gosec@latest
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-
-export PATH=$PATH:$(go env GOPATH)/bin
+setup_environment() {
+  log_header "Setting Up Security Scanning"
+  
+  # Clean and create report directory
+  log_info "Cleaning up old reports..."
+  rm -rf "$REPORT_DIR" .scannerwork
+  mkdir -p "$REPORT_DIR"
+  
+  # Clean up root level reports
+  rm -f gosec-report.* govuln-report.* summary-*.json SECURITY-SUMMARY.md
+  
+  log_success "Report directory ready: $REPORT_DIR"
+  
+  # Install/update security tools
+  log_info "Installing security tools..."
+  
+  retry_command "go install golang.org/x/vuln/cmd/govulncheck@latest" || log_warning "govulncheck install failed"
+  retry_command "go install github.com/securego/gosec/v2/cmd/gosec@latest" || log_warning "gosec install failed"
+  retry_command "go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest" || log_warning "golangci-lint install failed"
+  
+  export PATH=$PATH:$(go env GOPATH)/bin
+  
+  # Update Go modules
+  log_info "Downloading and verifying dependencies..."
+  go mod download || log_warning "go mod download had issues"
+  go mod verify || log_warning "go mod verify had issues"
+  
+  log_success "Environment setup complete"
+}
 
 # ==========================================
-# Dependency Download
+# Scanning Functions
 # ==========================================
 
-echo -e "${BLUE}📥 Downloading dependencies...${NC}"
-ensure_project_dir
-go mod download
-go mod verify
+scan_vulnerabilities() {
+  log_header "1️⃣  Vulnerability Scanning (govulncheck)"
+  
+  local vuln_json="$REPORT_DIR/govulncheck-${TIMESTAMP}.json"
+  local vuln_txt="$REPORT_DIR/govulncheck-${TIMESTAMP}.txt"
+  
+  log_info "Scanning for known vulnerabilities..."
+  log_info "Current directory: $(pwd)"
+  log_info "go.mod location: $(find . -name "go.mod" -type f 2>/dev/null | head -1)"
+  
+  # Verify go.mod exists
+  if [ ! -f "go.mod" ]; then
+    log_error "go.mod not found! Absolute path check..."
+    if [ -f "$PROJECT_DIR/go.mod" ]; then
+      log_info "go.mod found at: $PROJECT_DIR/go.mod"
+      cd "$PROJECT_DIR" || exit 1
+    else
+      log_error "go.mod not found anywhere"
+      echo "0|"
+      return 1
+    fi
+  fi
+  
+  # Run with error capture - ensure we're in correct directory
+  if (cd "$PROJECT_DIR" && GO111MODULE=on govulncheck -json ./... > "$vuln_json" 2>&1); then
+    local vuln_count=$(jq '[.Vulnerabilities[]? // empty] | length' "$vuln_json" 2>/dev/null || echo "0")
+    log_success "Vulnerability scan complete - Found: $vuln_count vulnerabilities"
+  else
+    local vuln_count=$(jq '[.Vulnerabilities[]? // empty] | length' "$vuln_json" 2>/dev/null || echo "0")
+    if [ "$vuln_count" -gt 0 ]; then
+      log_warning "Found $vuln_count vulnerabilities"
+    else
+      # Check if it's just the go.mod error
+      if grep -q "no go.mod file" "$vuln_json" 2>/dev/null; then
+        log_error "govulncheck could not find go.mod - checking module setup"
+        log_info "Trying alternative: checking go.sum..."
+        if [ ! -f "go.sum" ]; then
+          log_warning "go.sum missing - running go mod tidy..."
+          (cd "$PROJECT_DIR" && go mod tidy)
+        fi
+        # Retry
+        if (cd "$PROJECT_DIR" && GO111MODULE=on govulncheck -json ./... > "$vuln_json" 2>&1); then
+          vuln_count=$(jq '[.Vulnerabilities[]? // empty] | length' "$vuln_json" 2>/dev/null || echo "0")
+          log_success "Retry successful - Found: $vuln_count vulnerabilities"
+        else
+          log_warning "govulncheck failed even after retry"
+          vuln_count=0
+        fi
+      else
+        log_success "No known vulnerabilities found"
+      fi
+    fi
+  fi
+  
+  # Generate text report
+  (cd "$PROJECT_DIR" && GO111MODULE=on govulncheck ./... > "$vuln_txt" 2>&1) || true
+  
+  echo "$vuln_count|$vuln_json|$vuln_txt"
+}
+
+scan_security() {
+  log_header "2️⃣  Security Analysis (gosec)"
+  
+  local gosec_json="$REPORT_DIR/gosec-${TIMESTAMP}.json"
+  local gosec_html="$REPORT_DIR/gosec-${TIMESTAMP}.html"
+  local gosec_sarif="$REPORT_DIR/gosec-${TIMESTAMP}.sarif"
+  
+  log_info "Running static security analysis..."
+  
+  # Run gosec
+  if gosec -fmt=json -out="$gosec_json" ./... 2>&1; then
+    log_success "Gosec analysis complete"
+  else
+    log_warning "Gosec completed with findings"
+  fi
+  
+  # Generate HTML and SARIF reports
+  gosec -fmt=html -out="$gosec_html" ./... 2>/dev/null || true
+  gosec -fmt=sarif -out="$gosec_sarif" ./... 2>/dev/null || true
+  
+  # Parse results
+  if [ -f "$gosec_json" ]; then
+    local issues=$(jq -r '.Stats.found // 0' "$gosec_json" 2>/dev/null || echo "0")
+    local files=$(jq -r '.Stats.files // 0' "$gosec_json" 2>/dev/null || echo "0")
+    local lines=$(jq -r '.Stats.lines // 0' "$gosec_json" 2>/dev/null || echo "0")
+    
+    if [ "$issues" -gt 0 ]; then
+      log_warning "Found $issues security issues in $files files"
+    else
+      log_success "No security issues found"
+    fi
+    
+    echo "$issues|$files|$lines|$gosec_json|$gosec_html|$gosec_sarif"
+  else
+    log_error "Gosec report not generated"
+    echo "0|0|0|||"
+  fi
+}
+
+scan_code_quality() {
+  log_header "3️⃣  Code Quality Check (golangci-lint)"
+  
+  local lint_json="$REPORT_DIR/golangci-lint-${TIMESTAMP}.json"
+  
+  log_info "Running code quality checks..."
+  
+  golangci-lint run --out-format json ./... > "$lint_json" 2>&1 || true
+  
+  local issues=$(jq '[.Issues[]? // empty] | length' "$lint_json" 2>/dev/null || echo "0")
+  
+  if [ "$issues" -gt 0 ]; then
+    log_warning "Found $issues code quality issues"
+  else
+    log_success "No code quality issues found"
+  fi
+  
+  echo "$issues|$lint_json"
+}
+
+scan_dependencies() {
+  log_header "4️⃣  Dependency Scanning (Trivy)"
+  
+  local trivy_json="$REPORT_DIR/trivy-${TIMESTAMP}.json"
+  
+  # Check if trivy is installed
+  if ! command -v trivy &> /dev/null; then
+    log_warning "Trivy not installed - skipping dependency scan"
+    echo "0|"
+    return
+  fi
+  
+  log_info "Scanning dependencies for vulnerabilities..."
+  
+  if trivy fs --format json --output "$trivy_json" . 2>/dev/null; then
+    local dep_vuln=$(jq '[.Results[]?.Misconfigurations[]? // empty] | length' "$trivy_json" 2>/dev/null || echo "0")
+    log_success "Dependency scan complete - Found: $dep_vuln issues"
+  else
+    log_warning "Trivy scan encountered issues"
+  fi
+  
+  echo "0|$trivy_json"
+}
 
 # ==========================================
-# Vulnerability Scanning
+# Parallel Scanning
 # ==========================================
 
-echo -e "${BLUE}🔍 Running govulncheck (vulnerability scanning)...${NC}"
-VULN_REPORT="$REPORT_DIR/govulncheck-${TIMESTAMP}.txt"
-VULN_JSON="$REPORT_DIR/govulncheck-${TIMESTAMP}.json"
-VULN_SARIF="$REPORT_DIR/govulncheck-${TIMESTAMP}.sarif"
-
-# Ensure we're in the project directory before running govulncheck
-ensure_project_dir
-echo -e "${BLUE}Running govulncheck from: $(pwd)${NC}"
-
-# Verify go.mod exists right before running
-if [ ! -f "go.mod" ]; then
-  echo -e "${RED}❌ Error: go.mod disappeared! Current directory: $(pwd)${NC}"
-  exit 1
-fi
-
-# Create absolute paths for output files
-VULN_JSON_ABS="$PROJECT_DIR/$VULN_JSON"
-VULN_REPORT_ABS="$PROJECT_DIR/$VULN_REPORT"
-
-# Run govulncheck with explicit module mode
-if (cd "$PROJECT_DIR" && GO111MODULE=on govulncheck -json ./...) > "$VULN_JSON_ABS" 2>&1; then
-  VULN_STATUS="✅ PASSED"
-  VULN_COUNT=0
-else
-  VULN_STATUS="⚠️  VULNERABILITIES FOUND"
-  VULN_COUNT=$(jq '[.finding] | length' "$VULN_JSON_ABS" 2>/dev/null | tr -d '\n' || echo "0")
+run_parallel_scans() {
+  log_header "Running Parallel Security Scans"
+  
+  # Create temp files for results
+  local temp_vuln=$(mktemp)
+  local temp_sec=$(mktemp)
+  local temp_qual=$(mktemp)
+  local temp_dep=$(mktemp)
+  
+  # Run scans in background with proper error handling
+  (scan_vulnerabilities > "$temp_vuln" 2>&1) &
+  local pid1=$!
+  
+  (scan_security > "$temp_sec" 2>&1) &
+  local pid2=$!
+  
+  (scan_code_quality > "$temp_qual" 2>&1) &
+  local pid3=$!
+  
+  (scan_dependencies > "$temp_dep" 2>&1) &
+  local pid4=$!
+  
+  # Wait for all scans with timeout
+  local timeout=300  # 5 minutes
+  local elapsed=0
+  
+  while ps -p $pid1 $pid2 $pid3 $pid4 > /dev/null 2>&1 && [ $elapsed -lt $timeout ]; do
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+  
+  # Force kill if timeout
+  if ps -p $pid1 > /dev/null 2>&1; then kill $pid1 2>/dev/null || true; fi
+  if ps -p $pid2 > /dev/null 2>&1; then kill $pid2 2>/dev/null || true; fi
+  if ps -p $pid3 > /dev/null 2>&1; then kill $pid3 2>/dev/null || true; fi
+  if ps -p $pid4 > /dev/null 2>&1; then kill $pid4 2>/dev/null || true; fi
+  
+  # Capture results with fallback defaults
+  if [ -s "$temp_vuln" ]; then
+    IFS='|' read -r VULN_COUNT VULN_JSON VULN_TXT <<< "$(cat "$temp_vuln")"
+  else
+    VULN_COUNT=0
+    VULN_JSON=""
+    VULN_TXT=""
+  fi
+  
+  if [ -s "$temp_sec" ]; then
+    IFS='|' read -r ISSUES_FOUND FILES_SCANNED LINES_SCANNED GOSEC_REPORT GOSEC_HTML GOSEC_SARIF <<< "$(cat "$temp_sec")"
+  else
+    ISSUES_FOUND=0
+    FILES_SCANNED=0
+    LINES_SCANNED=0
+    GOSEC_REPORT=""
+    GOSEC_HTML=""
+    GOSEC_SARIF=""
+  fi
+  
+  if [ -s "$temp_qual" ]; then
+    IFS='|' read -r LINT_ISSUES LINT_REPORT <<< "$(cat "$temp_qual")"
+  else
+    LINT_ISSUES=0
+    LINT_REPORT=""
+  fi
+  
+  # Set defaults for empty values
   VULN_COUNT=${VULN_COUNT:-0}
-fi
-
-# Generate text report
-(cd "$PROJECT_DIR" && GO111MODULE=on govulncheck ./...) > "$VULN_REPORT_ABS" 2>&1 || true
-
-echo -e "${GREEN}✓ Vulnerability scan complete${NC}"
-
-# ==========================================
-# Static Security Analysis
-# ==========================================
-
-echo -e "${BLUE}🔒 Running gosec (static security analysis)...${NC}"
-GOSEC_REPORT="$REPORT_DIR/gosec-${TIMESTAMP}.json"
-GOSEC_HTML="$REPORT_DIR/gosec-${TIMESTAMP}.html"
-GOSEC_SARIF="$REPORT_DIR/gosec-${TIMESTAMP}.sarif"
-
-# Ensure we're in project directory
-ensure_project_dir
-
-# Run gosec and capture output
-if gosec -fmt=json -out="$GOSEC_REPORT" ./... 2>&1; then
-  echo -e "${GREEN}✓ Gosec completed successfully${NC}"
-else
-  echo -e "${YELLOW}⚠️  Gosec completed with findings${NC}"
-fi
-
-# Generate HTML report
-ensure_project_dir
-gosec -fmt=html -out="$GOSEC_HTML" ./... 2>/dev/null || true
-
-# Generate SARIF report for GitHub Security
-ensure_project_dir
-gosec -fmt=sarif -out="$GOSEC_SARIF" ./... 2>/dev/null || true
-
-# Parse gosec results only if file exists
-if [ -f "$GOSEC_REPORT" ]; then
-  ISSUES_FOUND=$(jq -r '.Stats.found // 0' "$GOSEC_REPORT" 2>/dev/null | tr -d '\n' || echo "0")
-  FILES_SCANNED=$(jq -r '.Stats.files // 0' "$GOSEC_REPORT" 2>/dev/null | tr -d '\n' || echo "0")
-  LINES_SCANNED=$(jq -r '.Stats.lines // 0' "$GOSEC_REPORT" 2>/dev/null | tr -d '\n' || echo "0")
   ISSUES_FOUND=${ISSUES_FOUND:-0}
   FILES_SCANNED=${FILES_SCANNED:-0}
   LINES_SCANNED=${LINES_SCANNED:-0}
-else
-  echo -e "${RED}❌ Gosec report not generated${NC}"
-  ISSUES_FOUND=0
-  FILES_SCANNED=0
-  LINES_SCANNED=0
-fi
-
-echo -e "${GREEN}✓ Static analysis complete${NC}"
-
-# ==========================================
-# Code Quality Check
-# ==========================================
-
-echo -e "${BLUE}📊 Running golangci-lint (code quality)...${NC}"
-LINT_REPORT="$REPORT_DIR/golangci-lint-${TIMESTAMP}.json"
-
-# Ensure we're in project directory
-ensure_project_dir
-
-golangci-lint run --out-format json ./... > "$LINT_REPORT" 2>&1 || true
-LINT_ISSUES=$(jq '[.Issues[]] | length' "$LINT_REPORT" 2>/dev/null | tr -d '\n' || echo "0")
-LINT_ISSUES=${LINT_ISSUES:-0}
-
-echo -e "${GREEN}✓ Code quality check complete${NC}"
+  LINT_ISSUES=${LINT_ISSUES:-0}
+  
+  log_success "All scans completed"
+  
+  # Cleanup temp files
+  rm -f "$temp_vuln" "$temp_sec" "$temp_qual" "$temp_dep"
+}
 
 # ==========================================
-# Generate Summary Report
+# Generate Reports
 # ==========================================
 
-SUMMARY_FILE="$REPORT_DIR/summary-${TIMESTAMP}.json"
-SUMMARY_MD="$REPORT_DIR/SECURITY-SUMMARY.md"
-
-# Build severity breakdown JSON
-if [ "$ISSUES_FOUND" -gt 0 ] && [ -f "$GOSEC_REPORT" ]; then
-  HIGH_SEV=$(jq '[.Issues[] | select(.severity=="HIGH")] | length' "$GOSEC_REPORT" 2>/dev/null | tr -d '\n' || echo "0")
-  MEDIUM_SEV=$(jq '[.Issues[] | select(.severity=="MEDIUM")] | length' "$GOSEC_REPORT" 2>/dev/null | tr -d '\n' || echo "0")
-  LOW_SEV=$(jq '[.Issues[] | select(.severity=="LOW")] | length' "$GOSEC_REPORT" 2>/dev/null | tr -d '\n' || echo "0")
-  HIGH_SEVER=${HIGH_SEV:-0}
-  MEDIUM_SEVER=${MEDIUM_SEV:-0}
-  LOW_SEVER=${LOW_SEV:-0}
-else
-  HIGH_SEVER=0
-  MEDIUM_SEVER=0
-  LOW_SEVER=0
-fi
-
-# Determine exit code early for summary
-if [ "$ISSUES_FOUND" -gt 0 ] && [ -f "$GOSEC_REPORT" ]; then
-  HIGH_SEVERITY=$(jq '[.Issues[] | select(.severity=="HIGH")] | length' "$GOSEC_REPORT" 2>/dev/null | tr -d '\n' || echo "0")
-  HIGH_SEVERITY=${HIGH_SEVERITY:-0}
-  TOTAL_CRITICAL=$((HIGH_SEVERITY + VULN_COUNT))
-else
-  TOTAL_CRITICAL=$VULN_COUNT
-fi
-
-if [ $TOTAL_CRITICAL -gt 0 ]; then
-  EXIT_CODE=1
-  OVERALL_STATUS="FAILED ❌"
-  STATUS_BADGE="![Security Status](https://img.shields.io/badge/Security-FAILED-red)"
-else
-  EXIT_CODE=0
-  OVERALL_STATUS="PASSED ✅"
-  STATUS_BADGE="![Security Status](https://img.shields.io/badge/Security-PASSED-green)"
-fi
-
-ensure_project_dir
-
-# Generate JSON summary
-cat > "$SUMMARY_FILE" << EOF
+generate_summary_json() {
+  log_info "Generating consolidated JSON report..."
+  
+  local summary_file="$REPORT_DIR/summary-${TIMESTAMP}.json"
+  
+  # Calculate severity breakdown
+  local high_sev=0
+  local med_sev=0
+  local low_sev=0
+  
+  if [ -f "$GOSEC_REPORT" ] && [ "$ISSUES_FOUND" -gt 0 ]; then
+    high_sev=$(jq '[.Issues[] | select(.severity=="HIGH")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0")
+    med_sev=$(jq '[.Issues[] | select(.severity=="MEDIUM")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0")
+    low_sev=$(jq '[.Issues[] | select(.severity=="LOW")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0")
+  fi
+  
+  local total_critical=$((VULN_COUNT + high_sev))
+  
+  cat > "$summary_file" << EOF
 {
   "scan_timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-  "project": "$PROJECT_NAME",
+  "project_name": "$PROJECT_NAME",
   "project_directory": "$PROJECT_DIR",
-  "overall_status": "$([ $EXIT_CODE -eq 0 ] && echo "PASSED" || echo "FAILED")",
-  "exit_code": $EXIT_CODE,
-  "total_critical_issues": $TOTAL_CRITICAL,
-  "scan_tools": {
-    "1_vulnerability_scan": {
+  "ci_environment": $([[ "$CI_MODE" == "true" ]] && echo "true" || echo "false"),
+  "overall_status": "$([ $total_critical -eq 0 ] && echo "PASSED" || echo "FAILED")",
+  "total_critical_issues": $total_critical,
+  "summary": {
+    "vulnerabilities": {
       "tool": "govulncheck",
-      "description": "Checks Go dependencies for known vulnerabilities",
-      "status": "$VULN_STATUS",
-      "vulnerabilities_found": $VULN_COUNT,
-      "report_file": "$VULN_REPORT",
-      "json_report": "$VULN_JSON"
+      "count": $VULN_COUNT,
+      "status": "$([ $VULN_COUNT -eq 0 ] && echo "PASSED" || echo "FAILED")"
     },
-    "2_security_analysis": {
+    "security_issues": {
       "tool": "gosec",
-      "description": "Static security analysis of Go code",
-      "issues_found": $ISSUES_FOUND,
-      "files_scanned": $FILES_SCANNED,
-      "lines_scanned": $LINES_SCANNED,
-      "severity_breakdown": {
-        "high": $HIGH_SEVER,
-        "medium": $MEDIUM_SEVER,
-        "low": $LOW_SEVER
-      },
-      "json_report": "$GOSEC_REPORT",
-      "html_report": "$GOSEC_HTML",
-      "sarif_report": "$GOSEC_SARIF"
+      "count": $ISSUES_FOUND,
+      "high": $high_sev,
+      "medium": $med_sev,
+      "low": $low_sev,
+      "status": "$([ $ISSUES_FOUND -eq 0 ] && echo "PASSED" || echo "FAILED")"
     },
-    "3_code_quality": {
+    "code_quality": {
       "tool": "golangci-lint",
-      "description": "Code quality and linting checks",
-      "issues_found": $LINT_ISSUES,
-      "report_file": "$LINT_REPORT"
+      "count": $LINT_ISSUES,
+      "status": "$([ $LINT_ISSUES -eq 0 ] && echo "PASSED" || echo "WARNING")"
     }
+  },
+  "reports": {
+    "gosec_json": "$GOSEC_REPORT",
+    "gosec_html": "$GOSEC_HTML",
+    "gosec_sarif": "$GOSEC_SARIF",
+    "govulncheck_json": "$VULN_JSON",
+    "golangci_lint_json": "$LINT_REPORT"
   }
 }
 EOF
 
-# Generate Markdown summary for GitHub/GitLab
-cat > "$SUMMARY_MD" << EOF
-# Security Scan Report
+  log_success "Summary saved: $summary_file"
+  echo "$summary_file"
+}
 
-$STATUS_BADGE
+generate_summary_markdown() {
+  log_info "Generating markdown report..."
+  
+  local summary_md="$REPORT_DIR/SECURITY-REPORT.md"
+  
+  # Calculate severity
+  local high_sev=0
+  if [ -f "$GOSEC_REPORT" ] && [ "$ISSUES_FOUND" -gt 0 ]; then
+    high_sev=$(jq '[.Issues[] | select(.severity=="HIGH")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0")
+  fi
+  
+  local total_critical=$((VULN_COUNT + high_sev))
+  
+  cat > "$summary_md" << 'MARKDOWN_EOF'
+# 🔒 Security Scan Report
 
-**Scan Date:** $(date '+%Y-%m-%d %H:%M:%S')  
+MARKDOWN_EOF
+
+  cat >> "$summary_md" << EOF
+
+**Generated:** $(date '+%Y-%m-%d %H:%M:%S UTC')  
 **Project:** $PROJECT_NAME  
-**Status:** $OVERALL_STATUS
+**Status:** $([ $total_critical -eq 0 ] && echo "✅ PASSED" || echo "❌ FAILED")
 
 ---
 
 ## 📊 Summary
 
-| Category | Tool | Issues Found | Status |
-|----------|------|--------------|--------|
-| 🔍 Vulnerabilities | govulncheck | $VULN_COUNT | $([ $VULN_COUNT -eq 0 ] && echo "✅ PASSED" || echo "❌ FAILED") |
-| 🔒 Security Issues | gosec | $ISSUES_FOUND | $([ $ISSUES_FOUND -eq 0 ] && echo "✅ PASSED" || echo "⚠️  ISSUES FOUND") |
-| 📊 Code Quality | golangci-lint | $LINT_ISSUES | $([ $LINT_ISSUES -eq 0 ] && echo "✅ PASSED" || echo "⚠️  ISSUES FOUND") |
+| Component | Issues | Status |
+|-----------|--------|--------|
+| 🔍 Vulnerabilities (govulncheck) | $VULN_COUNT | $([ $VULN_COUNT -eq 0 ] && echo "✅" || echo "❌") |
+| 🔒 Security (gosec) | $ISSUES_FOUND | $([ $ISSUES_FOUND -eq 0 ] && echo "✅" || echo "⚠️") |
+| 📊 Code Quality (golangci-lint) | $LINT_ISSUES | $([ $LINT_ISSUES -eq 0 ] && echo "✅" || echo "⚠️") |
 
 ---
 
-## 🔍 Vulnerability Scan (govulncheck)
+## 🔍 Vulnerability Scan Results
 
-- **Vulnerabilities Found:** $VULN_COUNT
-- **Status:** $VULN_STATUS
-- **Report:** [\`$VULN_REPORT\`]($VULN_REPORT)
+- **Total Vulnerabilities:** $VULN_COUNT
+- **Status:** $([ $VULN_COUNT -eq 0 ] && echo "✅ No vulnerabilities found" || echo "❌ CRITICAL - Vulnerabilities detected")
 
-$(if [ $VULN_COUNT -gt 0 ]; then
-  echo "⚠️  **Action Required:** Review and update vulnerable dependencies"
-else
-  echo "✅ No known vulnerabilities found in dependencies"
-fi)
+Report: [\`$VULN_JSON\`]($VULN_JSON)
 
 ---
 
-## 🔒 Security Analysis (gosec)
+## 🔒 Security Analysis Results
 
-- **Security Issues:** $ISSUES_FOUND
+- **Total Issues:** $ISSUES_FOUND
 - **Files Scanned:** $FILES_SCANNED
 - **Lines Scanned:** $LINES_SCANNED
 
 ### Severity Breakdown
-$(if [ "$ISSUES_FOUND" -gt 0 ]; then
-  echo "- 🔴 **High:** $HIGH_SEVER"
-  echo "- 🟡 **Medium:** $MEDIUM_SEVER"
-  echo "- 🟢 **Low:** $LOW_SEVER"
-else
-  echo "✅ No security issues detected"
-fi)
+| Level | Count |
+|-------|-------|
+| 🔴 High | $high_sev |
+| 🟡 Medium | $(jq '[.Issues[] | select(.severity=="MEDIUM")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0") |
+| 🟢 Low | $(jq '[.Issues[] | select(.severity=="LOW")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0") |
 
-### Reports
-- **JSON Report:** [\`$GOSEC_REPORT\`]($GOSEC_REPORT)
-- **HTML Report:** [\`$GOSEC_HTML\`]($GOSEC_HTML) - Open in browser for detailed view
-- **SARIF Report:** [\`$GOSEC_SARIF\`]($GOSEC_SARIF) - For GitHub Security integration
-
-$(if [ "$ISSUES_FOUND" -gt 0 ]; then
-  echo ""
-  echo "⚠️  **Action Required:** Review security issues in the HTML report"
-  echo ""
-  echo "To view the HTML report, run:"
-  echo "\`\`\`bash"
-  echo "open $GOSEC_HTML"
-  echo "# or"
-  echo "xdg-open $GOSEC_HTML"
-  echo "\`\`\`"
-fi)
+**Reports:**
+- JSON: [\`gosec-report.json\`]($GOSEC_REPORT)
+- HTML: [\`gosec-report.html\`]($GOSEC_HTML) - **Open in browser for details**
+- SARIF: [\`gosec-report.sarif\`]($GOSEC_SARIF)
 
 ---
 
-## 📊 Code Quality (golangci-lint)
+## 📊 Code Quality Results
 
-- **Issues Found:** $LINT_ISSUES
+- **Total Issues:** $LINT_ISSUES
 - **Report:** [\`$LINT_REPORT\`]($LINT_REPORT)
 
-$(if [ $LINT_ISSUES -gt 0 ]; then
-  echo "⚠️  **Action Required:** Review and fix code quality issues"
-else
-  echo "✅ No code quality issues found"
-fi)
-
 ---
 
-## 🎯 Overall Assessment
+## ✅ Merge Decision
 
-$(if [ $EXIT_CODE -eq 0 ]; then
-  echo "### ✅ Security Scan Passed"
+$(if [ $total_critical -eq 0 ]; then
+  echo "### ✅ APPROVED FOR MERGE"
   echo ""
-  echo "All security checks completed successfully. No critical issues found."
-  echo ""
-  echo "**This code is safe to merge.**"
+  echo "All security checks passed. No critical issues detected."
 else
-  echo "### ❌ Security Scan Failed"
+  echo "### ❌ BLOCKED FROM MERGE"
   echo ""
-  echo "**Critical Issues:** $TOTAL_CRITICAL"
+  echo "Critical security issues found: **$total_critical**"
   echo ""
+  echo "Please resolve the following:"
   if [ "$VULN_COUNT" -gt 0 ]; then
-    echo "- ❌ $VULN_COUNT vulnerabilities found in dependencies"
+    echo "- [ ] Fix $VULN_COUNT dependency vulnerabilities"
   fi
-  if [ "$HIGH_SEVER" -gt 0 ]; then
-    echo "- ❌ $HIGH_SEVER high-severity security issues found in code"
+  if [ "$high_sev" -gt 0 ]; then
+    echo "- [ ] Fix $high_sev high-severity security issues"
   fi
-  echo ""
-  echo "**⚠️  DO NOT MERGE until these issues are resolved.**"
 fi)
 
 ---
 
-## 📁 Generated Reports
+## 📁 Report Files
 
-All reports are located in: \`$REPORT_DIR/\`
+All reports are located in: **$REPORT_DIR/**
 
-| Report Type | File | Description |
-|-------------|------|-------------|
-| 📄 Summary JSON | \`$SUMMARY_FILE\` | Machine-readable summary |
-| 📄 Markdown Summary | \`$SUMMARY_MD\` | This file |
-| 🔍 Vulnerability (Text) | \`$VULN_REPORT\` | Human-readable vulnerability report |
-| 🔍 Vulnerability (JSON) | \`$VULN_JSON\` | Machine-readable vulnerability data |
-| 🔒 Security (JSON) | \`$GOSEC_REPORT\` | Machine-readable security issues |
-| 🔒 Security (HTML) | \`$GOSEC_HTML\` | **Interactive HTML report - OPEN THIS!** |
-| 🔒 Security (SARIF) | \`$GOSEC_SARIF\` | GitHub Security compatible format |
-| 📊 Quality (JSON) | \`$LINT_REPORT\` | Code quality issues |
+| File | Type | Purpose |
+|------|------|---------|
+| SECURITY-REPORT.md | Markdown | This summary |
+| summary-\*.json | JSON | Machine-readable summary |
+| gosec-\*.json | JSON | Detailed security findings |
+| gosec-\*.html | HTML | Interactive security report |
+| gosec-\*.sarif | SARIF | GitHub Security format |
+| govulncheck-\*.json | JSON | Vulnerability data |
+| golangci-lint-\*.json | JSON | Code quality findings |
 
 ---
 
-**Generated by:** Security Scan Script  
+**Generated by:** Security Scanner  
 **Timestamp:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 EOF
 
+  log_success "Markdown report saved: $summary_md"
+  echo "$summary_md"
+}
+
 # ==========================================
-# Determine Overall Status
+# Output Results
 # ==========================================
 
-SEVERITY_BREAKDOWN=""
-
-if [ "$ISSUES_FOUND" -gt 0 ] && [ -f "$GOSEC_REPORT" ]; then
-  HIGH_SEVERITY=$(jq '[.Issues[] | select(.severity=="HIGH")] | length' "$GOSEC_REPORT" 2>/dev/null | tr -d '\n' || echo "0")
-  MEDIUM_SEVERITY=$(jq '[.Issues[] | select(.severity=="MEDIUM")] | length' "$GOSEC_REPORT" 2>/dev/null | tr -d '\n' || echo "0")
-  LOW_SEVERITY=$(jq '[.Issues[] | select(.severity=="LOW")] | length' "$GOSEC_REPORT" 2>/dev/null | tr -d '\n' || echo "0")
-  HIGH_SEVERITY=${HIGH_SEVERITY:-0}
-  MEDIUM_SEVERITY=${MEDIUM_SEVERITY:-0}
-  LOW_SEVERITY=${LOW_SEVERITY:-0}
+display_results() {
+  log_header "Security Scan Results"
   
-  SEVERITY_BREAKDOWN="🔴 High: $HIGH_SEVERITY | 🟡 Medium: $MEDIUM_SEVERITY | 🟢 Low: $LOW_SEVERITY"
-else
-  SEVERITY_BREAKDOWN="No issues found"
-fi
-
-# ==========================================
-# Generate Console Report
-# ==========================================
-
-echo ""
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}         SECURITY SCAN SUMMARY${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-echo -e "Project:          $PROJECT_NAME"
-echo -e "Directory:        $PROJECT_DIR"
-echo -e "Timestamp:        $(date '+%Y-%m-%d %H:%M:%S')"
-echo ""
-echo -e "${BLUE}╔═══════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║        1. VULNERABILITY SCAN (govulncheck) ║${NC}"
-echo -e "${BLUE}╚═══════════════════════════════════════════╝${NC}"
-echo -e "Status:           $VULN_STATUS"
-echo -e "Vulnerabilities:  ${VULN_COUNT} $([ $VULN_COUNT -gt 0 ] && echo -e "${RED}⚠️${NC}" || echo -e "${GREEN}✓${NC}")"
-echo -e "Report:           $VULN_REPORT"
-echo ""
-echo -e "${BLUE}╔═══════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║        2. SECURITY ANALYSIS (gosec)        ║${NC}"
-echo -e "${BLUE}╚═══════════════════════════════════════════╝${NC}"
-echo -e "Security Issues:  ${ISSUES_FOUND} $([ $ISSUES_FOUND -gt 0 ] && echo -e "${RED}⚠️${NC}" || echo -e "${GREEN}✓${NC}")"
-if [ "$ISSUES_FOUND" -gt 0 ]; then
-  echo -e "Severity:         $SEVERITY_BREAKDOWN"
-fi
-echo -e "Files Scanned:    $FILES_SCANNED"
-echo -e "Lines Scanned:    $LINES_SCANNED"
-echo -e "JSON Report:      $GOSEC_REPORT"
-echo -e "HTML Report:      $GOSEC_HTML"
-echo -e "SARIF Report:     $GOSEC_SARIF"
-echo ""
-echo -e "${BLUE}╔═══════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║        3. CODE QUALITY (golangci-lint)     ║${NC}"
-echo -e "${BLUE}╚═══════════════════════════════════════════╝${NC}"
-echo -e "Quality Issues:   $LINT_ISSUES $([ $LINT_ISSUES -gt 0 ] && echo -e "${YELLOW}⚠️${NC}" || echo -e "${GREEN}✓${NC}")"
-echo -e "Report:           $LINT_REPORT"
-echo ""
-echo -e "${GREEN}📁 All reports saved in: $REPORT_DIR/${NC}"
-echo -e "${GREEN}📄 Summary (JSON):       $SUMMARY_FILE${NC}"
-echo -e "${GREEN}📄 Summary (Markdown):   $SUMMARY_MD${NC}"
-echo ""
-
-if [ $EXIT_CODE -eq 0 ]; then
-  echo -e "${GREEN}✅ All security checks passed!${NC}"
-  echo -e "${GREEN}✅ Safe to merge!${NC}"
-else
-  echo -e "${RED}❌ Critical security issues detected!${NC}"
+  local total_critical=$((VULN_COUNT + $(jq '[.Issues[] | select(.severity=="HIGH")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0")))
+  
+  echo -e "${MAGENTA}╔════════════════════════════════════════╗${NC}"
+  echo -e "${MAGENTA}║  1. Vulnerability Scan (govulncheck)   ║${NC}"
+  echo -e "${MAGENTA}╚════════════════════════════════════════╝${NC}"
+  echo "Vulnerabilities Found: ${VULN_COUNT} $([ "$VULN_COUNT" -eq 0 ] && echo -e "${GREEN}✓${NC}" || echo -e "${RED}✗${NC}")"
+  echo "Report: $VULN_JSON"
   echo ""
-  if [ "$VULN_COUNT" -gt 0 ]; then
-    echo -e "${RED}   • $VULN_COUNT vulnerabilities found in dependencies${NC}"
+  
+  echo -e "${MAGENTA}╔════════════════════════════════════════╗${NC}"
+  echo -e "${MAGENTA}║  2. Security Analysis (gosec)          ║${NC}"
+  echo -e "${MAGENTA}╚════════════════════════════════════════╝${NC}"
+  echo "Security Issues: ${ISSUES_FOUND} $([ "$ISSUES_FOUND" -eq 0 ] && echo -e "${GREEN}✓${NC}" || echo -e "${RED}✗${NC}")"
+  echo "Files Scanned: $FILES_SCANNED"
+  echo "Lines Scanned: $LINES_SCANNED"
+  echo "Reports:"
+  echo "  - JSON:  $GOSEC_REPORT"
+  echo "  - HTML:  $GOSEC_HTML"
+  echo "  - SARIF: $GOSEC_SARIF"
+  echo ""
+  
+  echo -e "${MAGENTA}╔════════════════════════════════════════╗${NC}"
+  echo -e "${MAGENTA}║  3. Code Quality (golangci-lint)       ║${NC}"
+  echo -e "${MAGENTA}╚════════════════════════════════════════╝${NC}"
+  echo "Quality Issues: ${LINT_ISSUES} $([ "$LINT_ISSUES" -eq 0 ] && echo -e "${GREEN}✓${NC}" || echo -e "${YELLOW}⚠${NC}")"
+  echo "Report: $LINT_REPORT"
+  echo ""
+  
+  echo -e "${MAGENTA}╔════════════════════════════════════════╗${NC}"
+  echo -e "${MAGENTA}║  📁 All Reports                         ║${NC}"
+  echo -e "${MAGENTA}╚════════════════════════════════════════╝${NC}"
+  echo "Location: $REPORT_DIR/"
+  echo ""
+  
+  if [ "$total_critical" -eq 0 ]; then
+    log_success "All security checks PASSED!"
+    log_success "✅ Safe to merge"
+    return 0
+  else
+    log_error "Security checks FAILED!"
+    log_error "Critical Issues: $total_critical"
+    log_error "❌ DO NOT MERGE"
+    return 1
   fi
-  if [ "$ISSUES_FOUND" -gt 0 ]; then
-    echo -e "${RED}   • $ISSUES_FOUND security issues found in code${NC}"
-    if [ "$HIGH_SEVER" -gt 0 ]; then
-      echo -e "${RED}   • $HIGH_SEVER HIGH severity issues${NC}"
+}
+
+# ==========================================
+# Output for CI/CD
+# ==========================================
+
+output_for_ci() {
+  if [ "$CI_MODE" = "true" ]; then
+    log_info "Outputting results for CI/CD system..."
+    
+    # Create JSON for CI systems
+    local ci_json="$REPORT_DIR/ci-report.json"
+    
+    local summary_json=$(ls -t "$REPORT_DIR"/summary-*.json | head -1)
+    
+    if [ -f "$summary_json" ]; then
+      cp "$summary_json" "$ci_json"
+      log_success "CI report saved: $ci_json"
     fi
   fi
-  echo ""
-  echo -e "${YELLOW}💡 View detailed findings:${NC}"
-  echo -e "   ${YELLOW}HTML Report:${NC} open $GOSEC_HTML"
-  echo -e "   ${YELLOW}Markdown:${NC}    cat $SUMMARY_MD"
-  echo ""
-  echo -e "${RED}⚠️  DO NOT MERGE until issues are resolved!${NC}"
-fi
+}
 
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+# ==========================================
+# Main Execution
+# ==========================================
 
-exit $EXIT_CODE
+main() {
+  log_header "🔐 Security Scanning Initiated"
+  
+  validate_environment
+  setup_environment
+  run_parallel_scans
+  
+  local summary_json=$(generate_summary_json)
+  local summary_md=$(generate_summary_markdown)
+  
+  output_for_ci
+  
+  display_results
+  local exit_code=$?
+  
+  log_header "🔐 Scan Complete"
+  
+  echo ""
+  log_info "View reports:"
+  echo "  Markdown: cat $summary_md"
+  echo "  JSON:     cat $summary_json"
+  if [ -n "$GOSEC_HTML" ] && [ -f "$GOSEC_HTML" ]; then
+    echo "  HTML:     open $GOSEC_HTML"
+  fi
+  echo ""
+  
+  exit $exit_code
+}
+
+# Run main function
+main "$@"
