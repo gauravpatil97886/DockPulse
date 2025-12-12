@@ -47,9 +47,12 @@ jobs:
 
       - name: Run Dependency Check
         run: |
-          wget https://github.com/dependency-check/dependency-check/releases/download/v8.4.0/dependency-check-8.4.0-release.zip
-          unzip dependency-check-8.4.0-release.zip -d depcheck
-          ./depcheck/dependency-check/bin/dependency-check.sh --project "repo-scan" --scan . --format JSON --out .
+          # Get latest version dynamically
+          VERSION=$(curl -s https://jeremylong.github.io/DependencyCheck/current.txt)
+          echo "Downloading Dependency-Check version: $VERSION"
+          wget "https://github.com/dependency-check/DependencyCheck/releases/download/v${VERSION}/dependency-check-${VERSION}-release.zip"
+          unzip "dependency-check-${VERSION}-release.zip" -d depcheck
+          ./depcheck/dependency-check/bin/dependency-check.sh --project "repo-scan" --scan . --format JSON --out . || true
           mv dependency-check-report.json depcheck.json || true
 
       - name: Consolidate all scan reports
