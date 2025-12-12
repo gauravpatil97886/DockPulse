@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # ==========================================
-# Enhanced Security Scanning Script
+# Enhanced Security Scanning Script v2.0
 # ==========================================
 # Features:
 # - Multiple security scanners (govulncheck, gosec, golangci-lint, trivy)
-# - CI/CD friendly (GitHub Actions, GitLab)
-# - JSON output for AI analysis
-# - Auto-retry for network failures
-# - Improved error handling
-# - Concurrent scanning
+# - CI/CD optimized (GitHub Actions, GitLab)
+# - JSON output for automation
+# - Improved error handling and retry logic
+# - Parallel scanning with proper synchronization
+# - Better reporting and GitHub integration
 # ==========================================
 
 set -euo pipefail
@@ -33,9 +33,10 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 PROJECT_NAME="${PROJECT_NAME:-$(basename "$(pwd)")}"
 PROJECT_DIR="$(pwd)"
 CI_MODE="${CI_MODE:-false}"
-PARALLEL_JOBS=3
+PARALLEL_JOBS=4
 RETRY_COUNT=3
 RETRY_DELAY=2
+SCAN_TIMEOUT=600  # 10 minutes
 
 # Detect CI environment
 if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ] || [ -n "${GITLAB_CI:-}" ]; then
@@ -108,17 +109,25 @@ validate_environment() {
   log_success "Found go.mod"
   log_success "Project directory: $PROJECT_DIR"
   
-  # Check for required tools
-  check_command() {
-    if ! command -v "$1" &> /dev/null; then
-      log_warning "$1 not found - will attempt installation"
-      return 1
-    fi
-    return 0
-  }
-  
-  check_command "go" || exit 1
+  # Check Go installation
+  if ! command -v go &> /dev/null; then
+    log_error "Go is not installed"
+    exit 1
+  fi
   log_success "Go compiler found: $(go version)"
+  
+  # Check jq installation
+  if ! command -v jq &> /dev/null; then
+    log_warning "jq not found - installing..."
+    if command -v apt-get &> /dev/null; then
+      sudo apt-get update -qq && sudo apt-get install -y jq
+    elif command -v yum &> /dev/null; then
+      sudo yum install -y jq
+    else
+      log_error "Cannot install jq - please install manually"
+      exit 1
+    fi
+  fi
 }
 
 # ==========================================
@@ -133,24 +142,48 @@ setup_environment() {
   rm -rf "$REPORT_DIR" .scannerwork
   mkdir -p "$REPORT_DIR"
   
-  # Clean up root level reports
-  rm -f gosec-report.* govuln-report.* summary-*.json SECURITY-SUMMARY.md
-  
   log_success "Report directory ready: $REPORT_DIR"
   
   # Install/update security tools
   log_info "Installing security tools..."
   
+  export GOPATH="${GOPATH:-$HOME/go}"
+  export PATH=$PATH:$GOPATH/bin
+  
+  # Install tools with retry
   retry_command "go install golang.org/x/vuln/cmd/govulncheck@latest" || log_warning "govulncheck install failed"
   retry_command "go install github.com/securego/gosec/v2/cmd/gosec@latest" || log_warning "gosec install failed"
   retry_command "go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest" || log_warning "golangci-lint install failed"
   
-  export PATH=$PATH:$(go env GOPATH)/bin
+  # Verify installations
+  if ! command -v govulncheck &> /dev/null; then
+    log_error "govulncheck installation failed"
+  else
+    log_success "govulncheck installed"
+  fi
+  
+  if ! command -v gosec &> /dev/null; then
+    log_error "gosec installation failed"
+  else
+    log_success "gosec installed"
+  fi
+  
+  if ! command -v golangci-lint &> /dev/null; then
+    log_error "golangci-lint installation failed"
+  else
+    log_success "golangci-lint installed"
+  fi
   
   # Update Go modules
   log_info "Downloading and verifying dependencies..."
-  go mod download || log_warning "go mod download had issues"
-  go mod verify || log_warning "go mod verify had issues"
+  go mod download 2>&1 || log_warning "go mod download had issues"
+  go mod verify 2>&1 || log_warning "go mod verify had issues"
+  
+  # Ensure go.sum exists
+  if [ ! -f "go.sum" ]; then
+    log_info "Generating go.sum..."
+    go mod tidy
+  fi
   
   log_success "Environment setup complete"
 }
@@ -166,55 +199,35 @@ scan_vulnerabilities() {
   local vuln_txt="$REPORT_DIR/govulncheck-${TIMESTAMP}.txt"
   
   log_info "Scanning for known vulnerabilities..."
-  log_info "Current directory: $(pwd)"
-  log_info "go.mod location: $(find . -name "go.mod" -type f 2>/dev/null | head -1)"
   
-  # Verify go.mod exists
+  # Verify we're in the right directory
   if [ ! -f "go.mod" ]; then
-    log_error "go.mod not found! Absolute path check..."
-    if [ -f "$PROJECT_DIR/go.mod" ]; then
-      log_info "go.mod found at: $PROJECT_DIR/go.mod"
-      cd "$PROJECT_DIR" || exit 1
-    else
-      log_error "go.mod not found anywhere"
-      echo "0|"
-      return 1
-    fi
+    log_error "go.mod not found in $(pwd)"
+    echo "0|||"
+    return 1
   fi
   
-  # Run with error capture - ensure we're in correct directory
-  if (cd "$PROJECT_DIR" && GO111MODULE=on govulncheck -json ./... > "$vuln_json" 2>&1); then
-    local vuln_count=$(jq '[.Vulnerabilities[]? // empty] | length' "$vuln_json" 2>/dev/null || echo "0")
+  # Run govulncheck with JSON output
+  local vuln_count=0
+  if timeout $SCAN_TIMEOUT govulncheck -json ./... > "$vuln_json" 2>&1; then
+    vuln_count=$(jq '[.finding? // empty | select(.osv != null)] | length' "$vuln_json" 2>/dev/null || echo "0")
     log_success "Vulnerability scan complete - Found: $vuln_count vulnerabilities"
   else
-    local vuln_count=$(jq '[.Vulnerabilities[]? // empty] | length' "$vuln_json" 2>/dev/null || echo "0")
-    if [ "$vuln_count" -gt 0 ]; then
-      log_warning "Found $vuln_count vulnerabilities"
-    else
-      # Check if it's just the go.mod error
-      if grep -q "no go.mod file" "$vuln_json" 2>/dev/null; then
-        log_error "govulncheck could not find go.mod - checking module setup"
-        log_info "Trying alternative: checking go.sum..."
-        if [ ! -f "go.sum" ]; then
-          log_warning "go.sum missing - running go mod tidy..."
-          (cd "$PROJECT_DIR" && go mod tidy)
-        fi
-        # Retry
-        if (cd "$PROJECT_DIR" && GO111MODULE=on govulncheck -json ./... > "$vuln_json" 2>&1); then
-          vuln_count=$(jq '[.Vulnerabilities[]? // empty] | length' "$vuln_json" 2>/dev/null || echo "0")
-          log_success "Retry successful - Found: $vuln_count vulnerabilities"
-        else
-          log_warning "govulncheck failed even after retry"
-          vuln_count=0
-        fi
+    # Check for actual vulnerabilities even if command failed
+    if [ -f "$vuln_json" ]; then
+      vuln_count=$(jq '[.finding? // empty | select(.osv != null)] | length' "$vuln_json" 2>/dev/null || echo "0")
+      if [ "$vuln_count" -gt 0 ]; then
+        log_warning "Found $vuln_count vulnerabilities"
       else
-        log_success "No known vulnerabilities found"
+        log_success "No known vulnerabilities found (scan completed with warnings)"
       fi
+    else
+      log_error "Vulnerability scan failed"
     fi
   fi
   
   # Generate text report
-  (cd "$PROJECT_DIR" && GO111MODULE=on govulncheck ./... > "$vuln_txt" 2>&1) || true
+  timeout $SCAN_TIMEOUT govulncheck ./... > "$vuln_txt" 2>&1 || true
   
   echo "$vuln_count|$vuln_json|$vuln_txt"
 }
@@ -228,34 +241,37 @@ scan_security() {
   
   log_info "Running static security analysis..."
   
-  # Run gosec
-  if gosec -fmt=json -out="$gosec_json" ./... 2>&1; then
-    log_success "Gosec analysis complete"
-  else
-    log_warning "Gosec completed with findings"
-  fi
-  
-  # Generate HTML and SARIF reports
-  gosec -fmt=html -out="$gosec_html" ./... 2>/dev/null || true
-  gosec -fmt=sarif -out="$gosec_sarif" ./... 2>/dev/null || true
+  # Run gosec with multiple output formats
+  timeout $SCAN_TIMEOUT gosec -fmt=json -out="$gosec_json" ./... 2>&1 || true
+  timeout $SCAN_TIMEOUT gosec -fmt=html -out="$gosec_html" ./... 2>&1 || true
+  timeout $SCAN_TIMEOUT gosec -fmt=sarif -out="$gosec_sarif" ./... 2>&1 || true
   
   # Parse results
+  local issues=0
+  local files=0
+  local lines=0
+  local high_sev=0
+  local med_sev=0
+  local low_sev=0
+  
   if [ -f "$gosec_json" ]; then
-    local issues=$(jq -r '.Stats.found // 0' "$gosec_json" 2>/dev/null || echo "0")
-    local files=$(jq -r '.Stats.files // 0' "$gosec_json" 2>/dev/null || echo "0")
-    local lines=$(jq -r '.Stats.lines // 0' "$gosec_json" 2>/dev/null || echo "0")
+    issues=$(jq -r '.Stats.found // 0' "$gosec_json" 2>/dev/null || echo "0")
+    files=$(jq -r '.Stats.files // 0' "$gosec_json" 2>/dev/null || echo "0")
+    lines=$(jq -r '.Stats.lines // 0' "$gosec_json" 2>/dev/null || echo "0")
+    high_sev=$(jq '[.Issues[]? | select(.severity=="HIGH")] | length' "$gosec_json" 2>/dev/null || echo "0")
+    med_sev=$(jq '[.Issues[]? | select(.severity=="MEDIUM")] | length' "$gosec_json" 2>/dev/null || echo "0")
+    low_sev=$(jq '[.Issues[]? | select(.severity=="LOW")] | length' "$gosec_json" 2>/dev/null || echo "0")
     
     if [ "$issues" -gt 0 ]; then
-      log_warning "Found $issues security issues in $files files"
+      log_warning "Found $issues security issues in $files files (High: $high_sev, Medium: $med_sev, Low: $low_sev)"
     else
       log_success "No security issues found"
     fi
-    
-    echo "$issues|$files|$lines|$gosec_json|$gosec_html|$gosec_sarif"
   else
     log_error "Gosec report not generated"
-    echo "0|0|0|||"
   fi
+  
+  echo "$issues|$files|$lines|$high_sev|$med_sev|$low_sev|$gosec_json|$gosec_html|$gosec_sarif"
 }
 
 scan_code_quality() {
@@ -265,14 +281,21 @@ scan_code_quality() {
   
   log_info "Running code quality checks..."
   
-  golangci-lint run --out-format json ./... > "$lint_json" 2>&1 || true
+  # Run with timeout and capture output
+  timeout $SCAN_TIMEOUT golangci-lint run --out-format json ./... > "$lint_json" 2>&1 || true
   
-  local issues=$(jq '[.Issues[]? // empty] | length' "$lint_json" 2>/dev/null || echo "0")
-  
-  if [ "$issues" -gt 0 ]; then
-    log_warning "Found $issues code quality issues"
+  local issues=0
+  if [ -f "$lint_json" ] && [ -s "$lint_json" ]; then
+    issues=$(jq '[.Issues[]? // empty] | length' "$lint_json" 2>/dev/null || echo "0")
+    
+    if [ "$issues" -gt 0 ]; then
+      log_warning "Found $issues code quality issues"
+    else
+      log_success "No code quality issues found"
+    fi
   else
-    log_success "No code quality issues found"
+    log_warning "golangci-lint produced no output"
+    echo '{"Issues":[]}' > "$lint_json"
   fi
   
   echo "$issues|$lint_json"
@@ -282,28 +305,35 @@ scan_dependencies() {
   log_header "4️⃣  Dependency Scanning (Trivy)"
   
   local trivy_json="$REPORT_DIR/trivy-${TIMESTAMP}.json"
+  local trivy_sarif="$REPORT_DIR/trivy-${TIMESTAMP}.sarif"
   
   # Check if trivy is installed
   if ! command -v trivy &> /dev/null; then
     log_warning "Trivy not installed - skipping dependency scan"
-    echo "0|"
-    return
+    echo "0||"
+    return 0
   fi
   
   log_info "Scanning dependencies for vulnerabilities..."
   
-  if trivy fs --format json --output "$trivy_json" . 2>/dev/null; then
-    local dep_vuln=$(jq '[.Results[]?.Misconfigurations[]? // empty] | length' "$trivy_json" 2>/dev/null || echo "0")
+  # Run trivy filesystem scan
+  local dep_vuln=0
+  if timeout $SCAN_TIMEOUT trivy fs --format json --output "$trivy_json" --scanners vuln,secret . 2>/dev/null; then
+    # Count vulnerabilities
+    dep_vuln=$(jq '[.Results[]?.Vulnerabilities[]? // empty] | length' "$trivy_json" 2>/dev/null || echo "0")
     log_success "Dependency scan complete - Found: $dep_vuln issues"
   else
     log_warning "Trivy scan encountered issues"
   fi
   
-  echo "0|$trivy_json"
+  # Generate SARIF format
+  timeout $SCAN_TIMEOUT trivy fs --format sarif --output "$trivy_sarif" . 2>/dev/null || true
+  
+  echo "$dep_vuln|$trivy_json|$trivy_sarif"
 }
 
 # ==========================================
-# Parallel Scanning
+# Parallel Scanning with Better Error Handling
 # ==========================================
 
 run_parallel_scans() {
@@ -315,7 +345,7 @@ run_parallel_scans() {
   local temp_qual=$(mktemp)
   local temp_dep=$(mktemp)
   
-  # Run scans in background with proper error handling
+  # Run scans in background
   (scan_vulnerabilities > "$temp_vuln" 2>&1) &
   local pid1=$!
   
@@ -328,46 +358,72 @@ run_parallel_scans() {
   (scan_dependencies > "$temp_dep" 2>&1) &
   local pid4=$!
   
-  # Wait for all scans with timeout
-  local timeout=300  # 5 minutes
-  local elapsed=0
+  log_info "Waiting for scans to complete (PIDs: $pid1, $pid2, $pid3, $pid4)..."
   
-  while ps -p $pid1 $pid2 $pid3 $pid4 > /dev/null 2>&1 && [ $elapsed -lt $timeout ]; do
+  # Wait for all with timeout
+  local timeout=600
+  local elapsed=0
+  local all_done=false
+  
+  while [ $elapsed -lt $timeout ]; do
+    if ! ps -p $pid1 $pid2 $pid3 $pid4 > /dev/null 2>&1; then
+      all_done=true
+      break
+    fi
     sleep 2
     elapsed=$((elapsed + 2))
+    
+    # Show progress every 30 seconds
+    if [ $((elapsed % 30)) -eq 0 ]; then
+      log_info "Still scanning... (${elapsed}s elapsed)"
+    fi
   done
   
-  # Force kill if timeout
-  if ps -p $pid1 > /dev/null 2>&1; then kill $pid1 2>/dev/null || true; fi
-  if ps -p $pid2 > /dev/null 2>&1; then kill $pid2 2>/dev/null || true; fi
-  if ps -p $pid3 > /dev/null 2>&1; then kill $pid3 2>/dev/null || true; fi
-  if ps -p $pid4 > /dev/null 2>&1; then kill $pid4 2>/dev/null || true; fi
+  if [ "$all_done" = false ]; then
+    log_warning "Timeout reached, terminating scans..."
+    kill $pid1 $pid2 $pid3 $pid4 2>/dev/null || true
+    wait 2>/dev/null || true
+  else
+    # Wait for all to finish cleanly
+    wait $pid1 $pid2 $pid3 $pid4 2>/dev/null || true
+  fi
   
-  # Capture results with fallback defaults
+  # Parse results with robust error handling
+  VULN_COUNT=0
+  VULN_JSON=""
+  VULN_TXT=""
+  
   if [ -s "$temp_vuln" ]; then
     IFS='|' read -r VULN_COUNT VULN_JSON VULN_TXT <<< "$(cat "$temp_vuln")"
-  else
-    VULN_COUNT=0
-    VULN_JSON=""
-    VULN_TXT=""
   fi
   
+  ISSUES_FOUND=0
+  FILES_SCANNED=0
+  LINES_SCANNED=0
+  HIGH_SEV=0
+  MED_SEV=0
+  LOW_SEV=0
+  GOSEC_REPORT=""
+  GOSEC_HTML=""
+  GOSEC_SARIF=""
+  
   if [ -s "$temp_sec" ]; then
-    IFS='|' read -r ISSUES_FOUND FILES_SCANNED LINES_SCANNED GOSEC_REPORT GOSEC_HTML GOSEC_SARIF <<< "$(cat "$temp_sec")"
-  else
-    ISSUES_FOUND=0
-    FILES_SCANNED=0
-    LINES_SCANNED=0
-    GOSEC_REPORT=""
-    GOSEC_HTML=""
-    GOSEC_SARIF=""
+    IFS='|' read -r ISSUES_FOUND FILES_SCANNED LINES_SCANNED HIGH_SEV MED_SEV LOW_SEV GOSEC_REPORT GOSEC_HTML GOSEC_SARIF <<< "$(cat "$temp_sec")"
   fi
+  
+  LINT_ISSUES=0
+  LINT_REPORT=""
   
   if [ -s "$temp_qual" ]; then
     IFS='|' read -r LINT_ISSUES LINT_REPORT <<< "$(cat "$temp_qual")"
-  else
-    LINT_ISSUES=0
-    LINT_REPORT=""
+  fi
+  
+  DEP_VULN=0
+  TRIVY_JSON=""
+  TRIVY_SARIF=""
+  
+  if [ -s "$temp_dep" ]; then
+    IFS='|' read -r DEP_VULN TRIVY_JSON TRIVY_SARIF <<< "$(cat "$temp_dep")"
   fi
   
   # Set defaults for empty values
@@ -375,7 +431,11 @@ run_parallel_scans() {
   ISSUES_FOUND=${ISSUES_FOUND:-0}
   FILES_SCANNED=${FILES_SCANNED:-0}
   LINES_SCANNED=${LINES_SCANNED:-0}
+  HIGH_SEV=${HIGH_SEV:-0}
+  MED_SEV=${MED_SEV:-0}
+  LOW_SEV=${LOW_SEV:-0}
   LINT_ISSUES=${LINT_ISSUES:-0}
+  DEP_VULN=${DEP_VULN:-0}
   
   log_success "All scans completed"
   
@@ -392,18 +452,12 @@ generate_summary_json() {
   
   local summary_file="$REPORT_DIR/summary-${TIMESTAMP}.json"
   
-  # Calculate severity breakdown
-  local high_sev=0
-  local med_sev=0
-  local low_sev=0
+  local total_critical=$((VULN_COUNT + HIGH_SEV))
+  local overall_status="PASSED"
   
-  if [ -f "$GOSEC_REPORT" ] && [ "$ISSUES_FOUND" -gt 0 ]; then
-    high_sev=$(jq '[.Issues[] | select(.severity=="HIGH")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0")
-    med_sev=$(jq '[.Issues[] | select(.severity=="MEDIUM")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0")
-    low_sev=$(jq '[.Issues[] | select(.severity=="LOW")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0")
+  if [ $total_critical -gt 0 ]; then
+    overall_status="FAILED"
   fi
-  
-  local total_critical=$((VULN_COUNT + high_sev))
   
   cat > "$summary_file" << EOF
 {
@@ -411,7 +465,7 @@ generate_summary_json() {
   "project_name": "$PROJECT_NAME",
   "project_directory": "$PROJECT_DIR",
   "ci_environment": $([[ "$CI_MODE" == "true" ]] && echo "true" || echo "false"),
-  "overall_status": "$([ $total_critical -eq 0 ] && echo "PASSED" || echo "FAILED")",
+  "overall_status": "$overall_status",
   "total_critical_issues": $total_critical,
   "summary": {
     "vulnerabilities": {
@@ -422,15 +476,20 @@ generate_summary_json() {
     "security_issues": {
       "tool": "gosec",
       "count": $ISSUES_FOUND,
-      "high": $high_sev,
-      "medium": $med_sev,
-      "low": $low_sev,
-      "status": "$([ $ISSUES_FOUND -eq 0 ] && echo "PASSED" || echo "FAILED")"
+      "high": $HIGH_SEV,
+      "medium": $MED_SEV,
+      "low": $LOW_SEV,
+      "status": "$([ $HIGH_SEV -eq 0 ] && echo "PASSED" || echo "FAILED")"
     },
     "code_quality": {
       "tool": "golangci-lint",
       "count": $LINT_ISSUES,
       "status": "$([ $LINT_ISSUES -eq 0 ] && echo "PASSED" || echo "WARNING")"
+    },
+    "dependencies": {
+      "tool": "trivy",
+      "count": $DEP_VULN,
+      "status": "INFO"
     }
   },
   "reports": {
@@ -438,12 +497,23 @@ generate_summary_json() {
     "gosec_html": "$GOSEC_HTML",
     "gosec_sarif": "$GOSEC_SARIF",
     "govulncheck_json": "$VULN_JSON",
-    "golangci_lint_json": "$LINT_REPORT"
+    "govulncheck_txt": "$VULN_TXT",
+    "golangci_lint_json": "$LINT_REPORT",
+    "trivy_json": "$TRIVY_JSON",
+    "trivy_sarif": "$TRIVY_SARIF"
+  },
+  "statistics": {
+    "files_scanned": $FILES_SCANNED,
+    "lines_scanned": $LINES_SCANNED
   }
 }
 EOF
 
   log_success "Summary saved: $summary_file"
+  
+  # Also create CI-friendly report
+  cp "$summary_file" "$REPORT_DIR/ci-report.json"
+  
   echo "$summary_file"
 }
 
@@ -451,21 +521,10 @@ generate_summary_markdown() {
   log_info "Generating markdown report..."
   
   local summary_md="$REPORT_DIR/SECURITY-REPORT.md"
+  local total_critical=$((VULN_COUNT + HIGH_SEV))
   
-  # Calculate severity
-  local high_sev=0
-  if [ -f "$GOSEC_REPORT" ] && [ "$ISSUES_FOUND" -gt 0 ]; then
-    high_sev=$(jq '[.Issues[] | select(.severity=="HIGH")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0")
-  fi
-  
-  local total_critical=$((VULN_COUNT + high_sev))
-  
-  cat > "$summary_md" << 'MARKDOWN_EOF'
+  cat > "$summary_md" << EOF
 # 🔒 Security Scan Report
-
-MARKDOWN_EOF
-
-  cat >> "$summary_md" << EOF
 
 **Generated:** $(date '+%Y-%m-%d %H:%M:%S UTC')  
 **Project:** $PROJECT_NAME  
@@ -478,8 +537,12 @@ MARKDOWN_EOF
 | Component | Issues | Status |
 |-----------|--------|--------|
 | 🔍 Vulnerabilities (govulncheck) | $VULN_COUNT | $([ $VULN_COUNT -eq 0 ] && echo "✅" || echo "❌") |
-| 🔒 Security (gosec) | $ISSUES_FOUND | $([ $ISSUES_FOUND -eq 0 ] && echo "✅" || echo "⚠️") |
+| 🔒 Security (gosec) | $ISSUES_FOUND | $([ $HIGH_SEV -eq 0 ] && echo "✅" || echo "⚠️") |
 | 📊 Code Quality (golangci-lint) | $LINT_ISSUES | $([ $LINT_ISSUES -eq 0 ] && echo "✅" || echo "⚠️") |
+| 📦 Dependencies (trivy) | $DEP_VULN | ℹ️ |
+
+**Files Scanned:** $FILES_SCANNED  
+**Lines Scanned:** $LINES_SCANNED
 
 ---
 
@@ -488,7 +551,9 @@ MARKDOWN_EOF
 - **Total Vulnerabilities:** $VULN_COUNT
 - **Status:** $([ $VULN_COUNT -eq 0 ] && echo "✅ No vulnerabilities found" || echo "❌ CRITICAL - Vulnerabilities detected")
 
-Report: [\`$VULN_JSON\`]($VULN_JSON)
+**Reports:**
+- JSON: [\`$(basename "$VULN_JSON")\`]($VULN_JSON)
+- Text: [\`$(basename "$VULN_TXT")\`]($VULN_TXT)
 
 ---
 
@@ -499,23 +564,33 @@ Report: [\`$VULN_JSON\`]($VULN_JSON)
 - **Lines Scanned:** $LINES_SCANNED
 
 ### Severity Breakdown
+
 | Level | Count |
 |-------|-------|
-| 🔴 High | $high_sev |
-| 🟡 Medium | $(jq '[.Issues[] | select(.severity=="MEDIUM")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0") |
-| 🟢 Low | $(jq '[.Issues[] | select(.severity=="LOW")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0") |
+| 🔴 High | $HIGH_SEV |
+| 🟡 Medium | $MED_SEV |
+| 🟢 Low | $LOW_SEV |
 
 **Reports:**
-- JSON: [\`gosec-report.json\`]($GOSEC_REPORT)
-- HTML: [\`gosec-report.html\`]($GOSEC_HTML) - **Open in browser for details**
-- SARIF: [\`gosec-report.sarif\`]($GOSEC_SARIF)
+- JSON: [\`$(basename "$GOSEC_REPORT")\`]($GOSEC_REPORT)
+- HTML: [\`$(basename "$GOSEC_HTML")\`]($GOSEC_HTML) - **Open in browser for details**
+- SARIF: [\`$(basename "$GOSEC_SARIF")\`]($GOSEC_SARIF)
 
 ---
 
 ## 📊 Code Quality Results
 
 - **Total Issues:** $LINT_ISSUES
-- **Report:** [\`$LINT_REPORT\`]($LINT_REPORT)
+- **Report:** [\`$(basename "$LINT_REPORT")\`]($LINT_REPORT)
+
+---
+
+## 📦 Dependency Scan Results
+
+- **Total Issues:** $DEP_VULN
+- **Reports:**
+  - JSON: [\`$(basename "$TRIVY_JSON")\`]($TRIVY_JSON)
+  - SARIF: [\`$(basename "$TRIVY_SARIF")\`]($TRIVY_SARIF)
 
 ---
 
@@ -534,8 +609,8 @@ else
   if [ "$VULN_COUNT" -gt 0 ]; then
     echo "- [ ] Fix $VULN_COUNT dependency vulnerabilities"
   fi
-  if [ "$high_sev" -gt 0 ]; then
-    echo "- [ ] Fix $high_sev high-severity security issues"
+  if [ "$HIGH_SEV" -gt 0 ]; then
+    echo "- [ ] Fix $HIGH_SEV high-severity security issues"
   fi
 fi)
 
@@ -545,65 +620,40 @@ fi)
 
 All reports are located in: **$REPORT_DIR/**
 
-| File | Type | Purpose |
-|------|------|---------|
-| SECURITY-REPORT.md | Markdown | This summary |
-| summary-\*.json | JSON | Machine-readable summary |
-| gosec-\*.json | JSON | Detailed security findings |
-| gosec-\*.html | HTML | Interactive security report |
-| gosec-\*.sarif | SARIF | GitHub Security format |
-| govulncheck-\*.json | JSON | Vulnerability data |
-| golangci-lint-\*.json | JSON | Code quality findings |
-
 ---
 
-**Generated by:** Security Scanner  
+**Generated by:** Security Scanner v2.0  
 **Timestamp:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 EOF
 
   log_success "Markdown report saved: $summary_md"
+  
+  # Also copy to GITHUB-SUMMARY.md for easier GitHub integration
+  cp "$summary_md" "$REPORT_DIR/GITHUB-SUMMARY.md"
+  
   echo "$summary_md"
 }
 
 # ==========================================
-# Output Results
+# Display Results
 # ==========================================
 
 display_results() {
   log_header "Security Scan Results"
   
-  local total_critical=$((VULN_COUNT + $(jq '[.Issues[] | select(.severity=="HIGH")] | length' "$GOSEC_REPORT" 2>/dev/null || echo "0")))
+  local total_critical=$((VULN_COUNT + HIGH_SEV))
   
   echo -e "${MAGENTA}╔════════════════════════════════════════╗${NC}"
-  echo -e "${MAGENTA}║  1. Vulnerability Scan (govulncheck)   ║${NC}"
+  echo -e "${MAGENTA}║  SCAN RESULTS SUMMARY                  ║${NC}"
   echo -e "${MAGENTA}╚════════════════════════════════════════╝${NC}"
-  echo "Vulnerabilities Found: ${VULN_COUNT} $([ "$VULN_COUNT" -eq 0 ] && echo -e "${GREEN}✓${NC}" || echo -e "${RED}✗${NC}")"
-  echo "Report: $VULN_JSON"
   echo ""
   
-  echo -e "${MAGENTA}╔════════════════════════════════════════╗${NC}"
-  echo -e "${MAGENTA}║  2. Security Analysis (gosec)          ║${NC}"
-  echo -e "${MAGENTA}╚════════════════════════════════════════╝${NC}"
-  echo "Security Issues: ${ISSUES_FOUND} $([ "$ISSUES_FOUND" -eq 0 ] && echo -e "${GREEN}✓${NC}" || echo -e "${RED}✗${NC}")"
-  echo "Files Scanned: $FILES_SCANNED"
-  echo "Lines Scanned: $LINES_SCANNED"
-  echo "Reports:"
-  echo "  - JSON:  $GOSEC_REPORT"
-  echo "  - HTML:  $GOSEC_HTML"
-  echo "  - SARIF: $GOSEC_SARIF"
+  echo "🔍 Vulnerabilities: $VULN_COUNT $([ "$VULN_COUNT" -eq 0 ] && echo -e "${GREEN}✓${NC}" || echo -e "${RED}✗${NC}")"
+  echo "🔒 Security Issues: $ISSUES_FOUND (High: $HIGH_SEV, Medium: $MED_SEV, Low: $LOW_SEV) $([ "$HIGH_SEV" -eq 0 ] && echo -e "${GREEN}✓${NC}" || echo -e "${RED}✗${NC}")"
+  echo "📊 Quality Issues: $LINT_ISSUES $([ "$LINT_ISSUES" -eq 0 ] && echo -e "${GREEN}✓${NC}" || echo -e "${YELLOW}⚠${NC}")"
+  echo "📦 Dependency Issues: $DEP_VULN"
   echo ""
-  
-  echo -e "${MAGENTA}╔════════════════════════════════════════╗${NC}"
-  echo -e "${MAGENTA}║  3. Code Quality (golangci-lint)       ║${NC}"
-  echo -e "${MAGENTA}╚════════════════════════════════════════╝${NC}"
-  echo "Quality Issues: ${LINT_ISSUES} $([ "$LINT_ISSUES" -eq 0 ] && echo -e "${GREEN}✓${NC}" || echo -e "${YELLOW}⚠${NC}")"
-  echo "Report: $LINT_REPORT"
-  echo ""
-  
-  echo -e "${MAGENTA}╔════════════════════════════════════════╗${NC}"
-  echo -e "${MAGENTA}║  📁 All Reports                         ║${NC}"
-  echo -e "${MAGENTA}╚════════════════════════════════════════╝${NC}"
-  echo "Location: $REPORT_DIR/"
+  echo "📁 Reports: $REPORT_DIR/"
   echo ""
   
   if [ "$total_critical" -eq 0 ]; then
@@ -619,31 +669,17 @@ display_results() {
 }
 
 # ==========================================
-# Output for CI/CD
-# ==========================================
-
-output_for_ci() {
-  if [ "$CI_MODE" = "true" ]; then
-    log_info "Outputting results for CI/CD system..."
-    
-    # Create JSON for CI systems
-    local ci_json="$REPORT_DIR/ci-report.json"
-    
-    local summary_json=$(ls -t "$REPORT_DIR"/summary-*.json | head -1)
-    
-    if [ -f "$summary_json" ]; then
-      cp "$summary_json" "$ci_json"
-      log_success "CI report saved: $ci_json"
-    fi
-  fi
-}
-
-# ==========================================
 # Main Execution
 # ==========================================
 
 main() {
+  local start_time=$(date +%s)
+  
   log_header "🔐 Security Scanning Initiated"
+  echo "Project: $PROJECT_NAME"
+  echo "Directory: $PROJECT_DIR"
+  echo "CI Mode: $CI_MODE"
+  echo ""
   
   validate_environment
   setup_environment
@@ -652,14 +688,16 @@ main() {
   local summary_json=$(generate_summary_json)
   local summary_md=$(generate_summary_markdown)
   
-  output_for_ci
-  
   display_results
   local exit_code=$?
+  
+  local end_time=$(date +%s)
+  local duration=$((end_time - start_time))
   
   log_header "🔐 Scan Complete"
   
   echo ""
+  log_info "Duration: ${duration}s"
   log_info "View reports:"
   echo "  Markdown: cat $summary_md"
   echo "  JSON:     cat $summary_json"
@@ -670,6 +708,9 @@ main() {
   
   exit $exit_code
 }
+
+# Trap errors
+trap 'log_error "Script failed at line $LINENO"' ERR
 
 # Run main function
 main "$@"

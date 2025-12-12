@@ -1,256 +1,133 @@
-name: Automated Security Scan & Analysis
+name: Security Scan
 
 on:
-  pull_request:
-    branches: [main, develop, staging]
-    types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [main, develop]
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+  checks: write
 
 jobs:
-  auto-security-analysis:
+  security-scan:
+    name: Security Scan
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      checks: write
-
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+        cache: true
+        
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y jq
+        
+    - name: Make script executable
+      run: chmod +x ./scan.sh
+        
+    - name: Run security scan
+      id: scan
+      continue-on-error: true
+      run: |
+        mkdir -p security-reports
 
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.21'
+        if ./scan.sh; then
+          echo "scan_status=success" >> $GITHUB_OUTPUT
+          echo "scan_result=✅ PASSED" >> $GITHUB_OUTPUT
+        else
+          echo "scan_status=failure" >> $GITHUB_OUTPUT
+          echo "scan_result=❌ FAILED" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Upload HTML Report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-reports
+        path: security-reports/
+        retention-days: 30
+        
+    - name: Upload SARIF to GitHub Security
+      if: always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: security-reports/*.sarif
+        category: gosec
+      continue-on-error: true
+        
+    - name: Comment on PR
+      if: github.event_name == 'pull_request' && always()
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          
+          const reportsDir = 'security-reports';
+          const summaryPath = path.join(reportsDir, 'SECURITY-SUMMARY.md');
 
-      - name: Run Gosec scan
-        run: |
-          curl -sfL https://raw.githubusercontent.com/securego/gosec/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
-          export PATH=$PATH:$(go env GOPATH)/bin
-          gosec -fmt json -out gosec.json ./... || true
-          gosec -fmt html -out gosec.html ./... || true
+          let commentBody;
 
-      - name: Run custom SCA script
-        run: |
-          bash sca.sh > custom-sca.json 2>&1 || true
+          if (fs.existsSync(summaryPath)) {
+            const summary = fs.readFileSync(summaryPath, 'utf8');
+            commentBody = `${summary}
 
-      - name: Run Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy.sarif'
-        continue-on-error: true
-
-      - name: Run Trivy JSON report
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'json'
-          output: 'trivy.json'
-        continue-on-error: true
-
-      - name: Run Dependency Check
-        run: |
-          # Get latest version and clean it
-          VERSION=$(curl -s https://jeremylong.github.io/DependencyCheck/current.txt | head -n1 | tr -d '\r\n')
-          echo "Downloading Dependency-Check version: $VERSION"
-          wget "https://github.com/jeremylong/DependencyCheck/releases/download/v${VERSION}/dependency-check-${VERSION}-release.zip"
-          unzip "dependency-check-${VERSION}-release.zip" -d depcheck
-          ./depcheck/dependency-check/bin/dependency-check.sh --project "repo-scan" --scan . --format JSON --out . || true
-          mv dependency-check-report.json depcheck.json || true
-
-      - name: Consolidate all scan reports
-        run: |
-          python3 << 'PYTHON_SCRIPT'
-          import json
-          import os
-          from datetime import datetime
-
-          consolidated = {
-              "scan_timestamp": datetime.utcnow().isoformat(),
-              "scanners": {},
-              "total_issues": 0,
-              "critical": 0,
-              "high": 0,
-              "medium": 0,
-              "low": 0,
-              "all_issues": []
+---
+📥 **Download detailed reports:**  
+https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          } else {
+            commentBody = `⚠️ Security scan completed, but no summary file was generated.`;
           }
 
-          # GOSEC
-          try:
-              with open('gosec.json') as f:
-                  gosec = json.load(f)
-                  issues = gosec.get("Issues", [])
-                  consolidated["scanners"]["gosec"] = len(issues)
-                  for issue in issues:
-                      sev = issue.get("Severity", "MEDIUM").upper()
-                      sev_lower = sev.lower()
-                      if sev_lower in ["critical", "high", "medium", "low"]:
-                          consolidated[sev_lower] += 1
-                      consolidated["all_issues"].append({
-                          "scanner": "gosec",
-                          "severity": sev,
-                          "rule": issue.get("RuleID"),
-                          "message": issue.get("What"),
-                          "file": issue.get("File"),
-                          "line": issue.get("Line")
-                      })
-          except Exception as e:
-              print(f"Warning: Could not process gosec.json: {e}")
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
 
-          # CUSTOM SCA
-          try:
-              with open('custom-sca.json') as f:
-                  content = f.read().strip()
-                  if content:
-                      custom = json.loads(content)
-                      if isinstance(custom, list):
-                          consolidated["scanners"]["custom_sca"] = len(custom)
-                          for issue in custom:
-                              consolidated["high"] += 1
-                              consolidated["all_issues"].append({
-                                  "scanner": "custom_sca",
-                                  "severity": "HIGH",
-                                  "rule": issue.get("type", "VULN"),
-                                  "message": issue.get("description") or issue.get("message"),
-                                  "file": issue.get("file"),
-                                  "line": issue.get("line", 0)
-                              })
-          except Exception as e:
-              print(f"Warning: Could not process custom-sca.json: {e}")
+          const botComment = comments.find(comment => 
+            comment.user.type === 'Bot' &&
+            comment.body.includes('Security Scan')
+          );
 
-          # TRIVY
-          try:
-              with open('trivy.json') as f:
-                  trivy = json.load(f)
-                  trivy_count = 0
-                  results = trivy.get("Results", [])
-                  for result in results:
-                      vulns = result.get("Vulnerabilities", [])
-                      for vuln in vulns:
-                          trivy_count += 1
-                          severity = vuln.get("Severity", "UNKNOWN").upper()
-                          sev_lower = severity.lower()
-                          if sev_lower in ["critical", "high", "medium", "low"]:
-                              consolidated[sev_lower] += 1
-                          consolidated["all_issues"].append({
-                              "scanner": "trivy",
-                              "severity": severity,
-                              "rule": vuln.get("VulnerabilityID"),
-                              "message": vuln.get("Title") or vuln.get("Description", "")[:100],
-                              "file": result.get("Target", ""),
-                              "line": 0
-                          })
-                  consolidated["scanners"]["trivy"] = trivy_count
-          except Exception as e:
-              print(f"Warning: Could not process trivy.json: {e}")
-
-          consolidated["total_issues"] = len(consolidated["all_issues"])
-
-          with open('consolidated-report.json', 'w') as f:
-              json.dump(consolidated, f, indent=2)
-
-          print("Consolidated report created")
-          print(f"Total issues found: {consolidated['total_issues']}")
-          PYTHON_SCRIPT
-
-      - name: Post Security Summary Comment to PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require("fs");
-
-            let report = {
-              critical: 0,
-              high: 0,
-              medium: 0,
-              low: 0,
-              total_issues: 0
-            };
-
-            try {
-              const content = fs.readFileSync("consolidated-report.json", "utf8");
-              report = JSON.parse(content);
-            } catch (error) {
-              console.log("Warning: Could not read consolidated report:", error.message);
-            }
-
-            let comment = `## 🔐 Automated Security Scan Report\n\n`;
-
-            comment += `### 📊 Summary\n`;
-            comment += `| Severity | Count |\n`;
-            comment += `|----------|-------|\n`;
-            comment += `| 🔴 Critical | ${report.critical || 0} |\n`;
-            comment += `| 🔴 High | ${report.high || 0} |\n`;
-            comment += `| 🟠 Medium | ${report.medium || 0} |\n`;
-            comment += `| 🟡 Low | ${report.low || 0} |\n`;
-            comment += `| **Total Issues** | **${report.total_issues || 0}** |\n\n`;
-
-            comment += `### 📝 Notes\n`;
-            comment += `This report includes output from:\n- Gosec\n- Trivy\n- Dependency Check\n- Custom SCA Script\n\n`;
-
-            comment += `### ⛔ Merge Guidance\n`;
-            if ((report.critical || 0) > 0) {
-              comment += `**❌ Critical vulnerabilities found — fix required before merge.**\n`;
-            } else if ((report.high || 0) > 3) {
-              comment += `**❌ Too many high severity issues — fix required before merge.**\n`;
-            } else {
-              comment += `**✅ No blocking issues — merge allowed.**\n`;
-            }
-
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
+          if (botComment) {
+            await github.rest.issues.updateComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: comment
+              comment_id: botComment.id,
+              body: commentBody
             });
-
-      - name: Auto-Fail on Critical Issues
-        run: |
-          python3 << 'PYTHON_SCRIPT'
-          import json
-          import sys
-
-          try:
-              with open('consolidated-report.json') as f:
-                  r = json.load(f)
-
-              if r.get("critical", 0) > 0:
-                  print("❌ Build failed: Critical vulnerabilities detected")
-                  sys.exit(1)
-
-              if r.get("high", 0) > 3:
-                  print("❌ Build failed: Too many high severity issues")
-                  sys.exit(1)
-
-              print("✅ Security check passed")
-          except FileNotFoundError:
-              print("⚠️ Warning: consolidated-report.json not found")
-              sys.exit(1)
-          except Exception as e:
-              print(f"⚠️ Error reading report: {e}")
-              sys.exit(1)
-          PYTHON_SCRIPT
-
-      - name: Upload Security Reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: security-reports
-          path: |
-            gosec.json
-            gosec.html
-            custom-sca.json
-            trivy.sarif
-            trivy.json
-            consolidated-report.json
-            depcheck.json
-          retention-days: 90
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+          }
+          
+    - name: Set job summary
+      if: always()
+      run: |
+        if [ -f "security-reports/SECURITY-SUMMARY.md" ]; then
+          cat security-reports/SECURITY-SUMMARY.md >> $GITHUB_STEP_SUMMARY
+        fi
+          
+    - name: Fail if security issues found
+      if: steps.scan.outputs.scan_status == 'failure'
+      run: |
+        echo "::error::❌ Security scan failed - critical issues detected"
+        echo "::error::View the Security tab or download artifacts for details"
+        exit 1

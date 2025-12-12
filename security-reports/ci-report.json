@@ -1,5 +1,5 @@
 {
-  "scan_timestamp": "2025-12-12T14:24:18Z",
+  "scan_timestamp": "2025-12-12T14:38:45Z",
   "project_name": "devops-dashboard-2",
   "project_directory": "/home/choice/Downloads/Projects/devops-dashboard-2",
   "ci_environment": false,
@@ -23,6 +23,11 @@
       "tool": "golangci-lint",
       "count": 0,
       "status": "PASSED"
+    },
+    "dependencies": {
+      "tool": "trivy",
+      "count": 0,
+      "status": "INFO"
     }
   },
   "reports": {
@@ -30,6 +35,13 @@
     "gosec_html": "",
     "gosec_sarif": "",
     "govulncheck_json": "",
-    "golangci_lint_json": ""
+    "govulncheck_txt": "",
+    "golangci_lint_json": "",
+    "trivy_json": "",
+    "trivy_sarif": ""
+  },
+  "statistics": {
+    "files_scanned": 0,
+    "lines_scanned": 0
   }
 }
