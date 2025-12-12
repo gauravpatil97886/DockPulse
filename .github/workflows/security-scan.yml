@@ -181,7 +181,7 @@ jobs:
 
       - name: Upload Security Reports
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: uses: actions/upload-artifact@v4
         with:
           name: security-reports
           path: |
