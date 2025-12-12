@@ -1,0 +1,36 @@
+{
+  "scan_timestamp": "2025-12-12T06:41:36Z",
+  "project": "Go Project",
+  "project_directory": "/home/choice/Downloads/Projects/devops-dashboard-2",
+  "overall_status": "FAILED",
+  "scan_tools": {
+    "1_vulnerability_scan": {
+      "tool": "govulncheck",
+      "description": "Checks Go dependencies for known vulnerabilities",
+      "status": "⚠️  VULNERABILITIES FOUND",
+      "vulnerabilities_found": 10,
+      "report_file": "security-reports/govulncheck-20251212_121129.txt",
+      "json_report": "security-reports/govulncheck-20251212_121129.json"
+    },
+    "2_security_analysis": {
+      "tool": "gosec",
+      "description": "Static security analysis of Go code",
+      "issues_found": 17,
+      "files_scanned": 12,
+      "lines_scanned": 3506,
+      "severity_breakdown": {
+        "high": 1,
+        "medium": 0,
+        "low": 16
+      },
+      "json_report": "security-reports/gosec-20251212_121129.json",
+      "html_report": "security-reports/gosec-20251212_121129.html"
+    },
+    "3_code_quality": {
+      "tool": "golangci-lint",
+      "description": "Code quality and linting checks",
+      "issues_found": 7,
+      "report_file": "security-reports/golangci-lint-20251212_121129.json"
+    }
+  }
+}
