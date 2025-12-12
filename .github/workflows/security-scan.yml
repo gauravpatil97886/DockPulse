@@ -44,6 +44,16 @@ jobs:
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy.sarif'
+        continue-on-error: true
+
+      - name: Run Trivy JSON report
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'json'
+          output: 'trivy.json'
+        continue-on-error: true
 
       - name: Run Dependency Check
         run: |
@@ -115,6 +125,32 @@ jobs:
                               })
           except Exception as e:
               print(f"Warning: Could not process custom-sca.json: {e}")
+
+          # TRIVY
+          try:
+              with open('trivy.json') as f:
+                  trivy = json.load(f)
+                  trivy_count = 0
+                  results = trivy.get("Results", [])
+                  for result in results:
+                      vulns = result.get("Vulnerabilities", [])
+                      for vuln in vulns:
+                          trivy_count += 1
+                          severity = vuln.get("Severity", "UNKNOWN").upper()
+                          sev_lower = severity.lower()
+                          if sev_lower in ["critical", "high", "medium", "low"]:
+                              consolidated[sev_lower] += 1
+                          consolidated["all_issues"].append({
+                              "scanner": "trivy",
+                              "severity": severity,
+                              "rule": vuln.get("VulnerabilityID"),
+                              "message": vuln.get("Title") or vuln.get("Description", "")[:100],
+                              "file": result.get("Target", ""),
+                              "line": 0
+                          })
+                  consolidated["scanners"]["trivy"] = trivy_count
+          except Exception as e:
+              print(f"Warning: Could not process trivy.json: {e}")
 
           consolidated["total_issues"] = len(consolidated["all_issues"])
 
@@ -214,6 +250,7 @@ jobs:
             gosec.html
             custom-sca.json
             trivy.sarif
+            trivy.json
             consolidated-report.json
             depcheck.json
           retention-days: 90
