@@ -41,16 +41,16 @@ jobs:
       continue-on-error: true
       run: |
         mkdir -p security-reports
-
+        
         if ./scan.sh; then
           echo "scan_status=success" >> $GITHUB_OUTPUT
-          echo "scan_result=✅ PASSED" >> $GITHUB_OUTPUT
+          echo "scan_result=PASSED" >> $GITHUB_OUTPUT
         else
           echo "scan_status=failure" >> $GITHUB_OUTPUT
-          echo "scan_result=❌ FAILED" >> $GITHUB_OUTPUT
+          echo "scan_result=FAILED" >> $GITHUB_OUTPUT
         fi
         
-    - name: Upload HTML Report
+    - name: Upload Reports as Artifact
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -70,43 +70,46 @@ jobs:
       if: github.event_name == 'pull_request' && always()
       uses: actions/github-script@v7
       with:
-        github-token: ${{secrets.GITHUB_TOKEN}}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
           const fs = require('fs');
           const path = require('path');
-          
+
           const reportsDir = 'security-reports';
           const summaryPath = path.join(reportsDir, 'SECURITY-SUMMARY.md');
 
-          let commentBody;
+          let commentBody = "";
 
+          // Build comment body
           if (fs.existsSync(summaryPath)) {
             const summary = fs.readFileSync(summaryPath, 'utf8');
-            commentBody = `${summary}
+            commentBody = summary + `
 
 ---
 📥 **Download detailed reports:**  
-https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
+`;
           } else {
-            commentBody = `⚠️ Security scan completed, but no summary file was generated.`;
+            commentBody = "⚠️ Security scan completed, but no SECURITY-SUMMARY.md was found.";
           }
 
+          // Fetch existing comments
           const { data: comments } = await github.rest.issues.listComments({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            issue_number: context.issue.number,
+            issue_number: context.issue.number
           });
 
-          const botComment = comments.find(comment => 
-            comment.user.type === 'Bot' &&
-            comment.body.includes('Security Scan')
+          const existing = comments.find(c =>
+            c.user.type === "Bot" &&
+            c.body.includes("Download detailed reports")
           );
 
-          if (botComment) {
+          if (existing) {
             await github.rest.issues.updateComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              comment_id: botComment.id,
+              comment_id: existing.id,
               body: commentBody
             });
           } else {
@@ -117,7 +120,7 @@ https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${con
               body: commentBody
             });
           }
-          
+
     - name: Set job summary
       if: always()
       run: |
@@ -128,6 +131,5 @@ https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${con
     - name: Fail if security issues found
       if: steps.scan.outputs.scan_status == 'failure'
       run: |
-        echo "::error::❌ Security scan failed - critical issues detected"
-        echo "::error::View the Security tab or download artifacts for details"
+        echo "::error::❌ Security scan failed - vulnerabilities detected"
         exit 1
