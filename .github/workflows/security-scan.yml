@@ -29,12 +29,13 @@ jobs:
       - name: Run Gosec scan
         run: |
           curl -sfL https://raw.githubusercontent.com/securego/gosec/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
-          gosec -fmt json -out /tmp/gosec.json ./... || true
-          gosec -fmt html -out /tmp/gosec.html ./... || true
+          export PATH=$PATH:$(go env GOPATH)/bin
+          gosec -fmt json -out gosec.json ./... || true
+          gosec -fmt html -out gosec.html ./... || true
 
       - name: Run custom SCA script
         run: |
-          bash sca.sh > /tmp/custom-sca.json 2>&1 || true
+          bash sca.sh > custom-sca.json 2>&1 || true
 
       - name: Run Trivy vulnerability scan
         uses: aquasecurity/trivy-action@master
@@ -42,22 +43,24 @@ jobs:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'sarif'
-          output: '/tmp/trivy.sarif'
+          output: 'trivy.sarif'
 
       - name: Run Dependency Check
         run: |
           wget https://github.com/dependency-check/dependency-check/releases/download/v8.4.0/dependency-check-8.4.0-release.zip
           unzip dependency-check-8.4.0-release.zip -d depcheck
-          ./depcheck/dependency-check/bin/dependency-check.sh --project "repo-scan" --scan . --format JSON --out /tmp/
-          mv /tmp/dependency-check-report.json /tmp/depcheck.json || true
+          ./depcheck/dependency-check/bin/dependency-check.sh --project "repo-scan" --scan . --format JSON --out .
+          mv dependency-check-report.json depcheck.json || true
 
       - name: Consolidate all scan reports
         run: |
           python3 << 'PYTHON_SCRIPT'
           import json
+          import os
+          from datetime import datetime
 
           consolidated = {
-              "scan_timestamp": "generated",
+              "scan_timestamp": datetime.utcnow().isoformat(),
               "scanners": {},
               "total_issues": 0,
               "critical": 0,
@@ -69,14 +72,15 @@ jobs:
 
           # GOSEC
           try:
-              with open('/tmp/gosec.json') as f:
+              with open('gosec.json') as f:
                   gosec = json.load(f)
                   issues = gosec.get("Issues", [])
                   consolidated["scanners"]["gosec"] = len(issues)
                   for issue in issues:
                       sev = issue.get("Severity", "MEDIUM").upper()
-                      if sev.lower() in consolidated:
-                          consolidated[sev.lower()] += 1
+                      sev_lower = sev.lower()
+                      if sev_lower in ["critical", "high", "medium", "low"]:
+                          consolidated[sev_lower] += 1
                       consolidated["all_issues"].append({
                           "scanner": "gosec",
                           "severity": sev,
@@ -85,34 +89,37 @@ jobs:
                           "file": issue.get("File"),
                           "line": issue.get("Line")
                       })
-          except:
-              pass
+          except Exception as e:
+              print(f"Warning: Could not process gosec.json: {e}")
 
           # CUSTOM SCA
           try:
-              with open('/tmp/custom-sca.json') as f:
-                  custom = json.load(f)
-                  if isinstance(custom, list):
-                      consolidated["scanners"]["custom_sca"] = len(custom)
-                      for issue in custom:
-                          consolidated["high"] += 1
-                          consolidated["all_issues"].append({
-                              "scanner": "custom_sca",
-                              "severity": "HIGH",
-                              "rule": issue.get("type", "VULN"),
-                              "message": issue.get("description") or issue.get("message"),
-                              "file": issue.get("file"),
-                              "line": issue.get("line", 0)
-                          })
-          except:
-              pass
+              with open('custom-sca.json') as f:
+                  content = f.read().strip()
+                  if content:
+                      custom = json.loads(content)
+                      if isinstance(custom, list):
+                          consolidated["scanners"]["custom_sca"] = len(custom)
+                          for issue in custom:
+                              consolidated["high"] += 1
+                              consolidated["all_issues"].append({
+                                  "scanner": "custom_sca",
+                                  "severity": "HIGH",
+                                  "rule": issue.get("type", "VULN"),
+                                  "message": issue.get("description") or issue.get("message"),
+                                  "file": issue.get("file"),
+                                  "line": issue.get("line", 0)
+                              })
+          except Exception as e:
+              print(f"Warning: Could not process custom-sca.json: {e}")
 
           consolidated["total_issues"] = len(consolidated["all_issues"])
 
-          with open('/tmp/consolidated-report.json', 'w') as f:
+          with open('consolidated-report.json', 'w') as f:
               json.dump(consolidated, f, indent=2)
 
           print("Consolidated report created")
+          print(f"Total issues found: {consolidated['total_issues']}")
           PYTHON_SCRIPT
 
       - name: Post Security Summary Comment to PR
@@ -122,12 +129,19 @@ jobs:
           script: |
             const fs = require("fs");
 
-            let report = {};
+            let report = {
+              critical: 0,
+              high: 0,
+              medium: 0,
+              low: 0,
+              total_issues: 0
+            };
 
             try {
-              report = JSON.parse(fs.readFileSync("/tmp/consolidated-report.json"));
-            } catch {
-              report = {};
+              const content = fs.readFileSync("consolidated-report.json", "utf8");
+              report = JSON.parse(content);
+            } catch (error) {
+              console.log("Warning: Could not read consolidated report:", error.message);
             }
 
             let comment = `## 🔐 Automated Security Scan Report\n\n`;
@@ -135,19 +149,19 @@ jobs:
             comment += `### 📊 Summary\n`;
             comment += `| Severity | Count |\n`;
             comment += `|----------|-------|\n`;
-            comment += `| 🔴 Critical | ${report.critical} |\n`;
-            comment += `| 🔴 High | ${report.high} |\n`;
-            comment += `| 🟠 Medium | ${report.medium} |\n`;
-            comment += `| 🟡 Low | ${report.low} |\n`;
-            comment += `| **Total Issues** | **${report.total_issues}** |\n\n`;
+            comment += `| 🔴 Critical | ${report.critical || 0} |\n`;
+            comment += `| 🔴 High | ${report.high || 0} |\n`;
+            comment += `| 🟠 Medium | ${report.medium || 0} |\n`;
+            comment += `| 🟡 Low | ${report.low || 0} |\n`;
+            comment += `| **Total Issues** | **${report.total_issues || 0}** |\n\n`;
 
             comment += `### 📝 Notes\n`;
             comment += `This report includes output from:\n- Gosec\n- Trivy\n- Dependency Check\n- Custom SCA Script\n\n`;
 
             comment += `### ⛔ Merge Guidance\n`;
-            if (report.critical > 0) {
+            if ((report.critical || 0) > 0) {
               comment += `**❌ Critical vulnerabilities found — fix required before merge.**\n`;
-            } else if (report.high > 3) {
+            } else if ((report.high || 0) > 3) {
               comment += `**❌ Too many high severity issues — fix required before merge.**\n`;
             } else {
               comment += `**✅ No blocking issues — merge allowed.**\n`;
@@ -164,19 +178,27 @@ jobs:
         run: |
           python3 << 'PYTHON_SCRIPT'
           import json
+          import sys
 
-          with open('/tmp/consolidated-report.json') as f:
-              r = json.load(f)
+          try:
+              with open('consolidated-report.json') as f:
+                  r = json.load(f)
 
-          if r.get("critical", 0) > 0:
-              print("❌ Build failed: Critical vulnerabilities detected")
-              exit(1)
+              if r.get("critical", 0) > 0:
+                  print("❌ Build failed: Critical vulnerabilities detected")
+                  sys.exit(1)
 
-          if r.get("high", 0) > 3:
-              print("❌ Build failed: Too many high severity issues")
-              exit(1)
+              if r.get("high", 0) > 3:
+                  print("❌ Build failed: Too many high severity issues")
+                  sys.exit(1)
 
-          print("✅ Security check passed")
+              print("✅ Security check passed")
+          except FileNotFoundError:
+              print("⚠️ Warning: consolidated-report.json not found")
+              sys.exit(1)
+          except Exception as e:
+              print(f"⚠️ Error reading report: {e}")
+              sys.exit(1)
           PYTHON_SCRIPT
 
       - name: Upload Security Reports
@@ -185,10 +207,10 @@ jobs:
         with:
           name: security-reports
           path: |
-            /tmp/gosec.json
-            /tmp/gosec.html
-            /tmp/custom-sca.json
-            /tmp/trivy.sarif
-            /tmp/consolidated-report.json
-            /tmp/depcheck.json
+            gosec.json
+            gosec.html
+            custom-sca.json
+            trivy.sarif
+            consolidated-report.json
+            depcheck.json
           retention-days: 90
