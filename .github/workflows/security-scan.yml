@@ -2,31 +2,31 @@ name: Security Scan
 
 on:
   push:
+    branches: [ main ]
   pull_request:
 
 jobs:
-  scan:
+  security-scan:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Install jq
-        run: sudo apt-get install -y jq
-
-      - name: Setup Go
-        uses: actions/setup-go@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          go-version: "1.22"
+          node-version: 18
 
-      - name: Make script executable
-        run: chmod +x scan.sh
+      - name: Install dependencies
+        run: npm install
 
-      - name: Run scan
-        run: ./scan.sh
+      - name: Run security scan
+        run: npm audit --json > security-report.json
 
-      - name: Upload reports
-        uses: actions/upload-artifact@v3
+      # ✅ FIX: upload-artifact v3 → v4
+      - name: Upload security scan report
+        uses: actions/upload-artifact@v4
         with:
-          name: security-reports
-          path: security-reports
+          name: security-report
+          path: security-report.json
