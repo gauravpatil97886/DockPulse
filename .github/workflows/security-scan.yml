@@ -47,10 +47,10 @@ jobs:
 
       - name: Run Dependency Check
         run: |
-          # Get latest version dynamically
-          VERSION=$(curl -s https://jeremylong.github.io/DependencyCheck/current.txt)
+          # Get latest version and clean it
+          VERSION=$(curl -s https://jeremylong.github.io/DependencyCheck/current.txt | head -n1 | tr -d '\r\n')
           echo "Downloading Dependency-Check version: $VERSION"
-          wget "https://github.com/dependency-check/DependencyCheck/releases/download/v${VERSION}/dependency-check-${VERSION}-release.zip"
+          wget "https://github.com/jeremylong/DependencyCheck/releases/download/v${VERSION}/dependency-check-${VERSION}-release.zip"
           unzip "dependency-check-${VERSION}-release.zip" -d depcheck
           ./depcheck/dependency-check/bin/dependency-check.sh --project "repo-scan" --scan . --format JSON --out . || true
           mv dependency-check-report.json depcheck.json || true
