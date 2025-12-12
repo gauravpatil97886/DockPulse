@@ -1,0 +1,135 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+  checks: write
+
+jobs:
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+        cache: true
+        
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y jq
+        
+    - name: Make script executable
+      run: chmod +x ./scan.sh
+        
+    - name: Run security scan
+      id: scan
+      continue-on-error: true
+      run: |
+        mkdir -p security-reports
+        
+        if ./scan.sh; then
+          echo "scan_status=success" >> $GITHUB_OUTPUT
+          echo "scan_result=PASSED" >> $GITHUB_OUTPUT
+        else
+          echo "scan_status=failure" >> $GITHUB_OUTPUT
+          echo "scan_result=FAILED" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Upload Reports as Artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-reports
+        path: security-reports/
+        retention-days: 30
+        
+    - name: Upload SARIF to GitHub Security
+      if: always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: security-reports/*.sarif
+        category: gosec
+      continue-on-error: true
+        
+    - name: Comment on PR
+      if: github.event_name == 'pull_request' && always()
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+
+          const reportsDir = 'security-reports';
+          const summaryPath = path.join(reportsDir, 'SECURITY-SUMMARY.md');
+
+          let commentBody = "";
+
+          // Build comment body
+          if (fs.existsSync(summaryPath)) {
+            const summary = fs.readFileSync(summaryPath, 'utf8');
+            commentBody = summary + `
+
+---
+📥 **Download detailed reports:**  
+https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
+`;
+          } else {
+            commentBody = "⚠️ Security scan completed, but no SECURITY-SUMMARY.md was found.";
+          }
+
+          // Fetch existing comments
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number
+          });
+
+          const existing = comments.find(c =>
+            c.user.type === "Bot" &&
+            c.body.includes("Download detailed reports")
+          );
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body: commentBody
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+          }
+
+    - name: Set job summary
+      if: always()
+      run: |
+        if [ -f "security-reports/SECURITY-SUMMARY.md" ]; then
+          cat security-reports/SECURITY-SUMMARY.md >> $GITHUB_STEP_SUMMARY
+        fi
+          
+    - name: Fail if security issues found
+      if: steps.scan.outputs.scan_status == 'failure'
+      run: |
+        echo "::error::❌ Security scan failed - vulnerabilities detected"
+        exit 1
