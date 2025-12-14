@@ -1,0 +1,425 @@
+{
+	"Golang errors": {
+		"": [
+			{
+				"line": 0,
+				"column": 0,
+				"error": "# command-line-arguments\ninternal/ui/dashboard/advanceLogSeaarch.go:14:2: syntax error: unexpected name yellow after top level declaration\ninternal/ui/dashboard/advanceLogSeaarch.go:14:29: newline in string\ninternal/ui/dashboard/advanceLogSeaarch.go:67:2: syntax error: non-declaration statement outside function body\ninternal/ui/dashboard/advanceLogSeaarch.go:67:24: method has no receiver\ninternal/ui/dashboard/advanceLogSeaarch.go:79:2: syntax error: non-declaration statement outside function body\ninternal/ui/dashboard/advanceLogSeaarch.go:79:24: method has no receiver\ninternal/ui/dashboard/advanceLogSeaarch.go:176:2: syntax error: non-declaration statement outside function body\ninternal/ui/dashboard/advanceLogSeaarch.go:176:12: method has no receiver\ninternal/ui/dashboard/advanceLogSeaarch.go:205:3: syntax error: unexpected ( after top level declaration\ninternal/ui/dashboard/advanceLogSeaarch.go:207:46: syntax error: unexpected {, expected name\ninternal/ui/dashboard/advanceLogSeaarch.go:207:46: too many errors"
+			}
+		],
+		"/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/advanceLogSeaarch.go": [
+			{
+				"line": 4,
+				"column": 2,
+				"error": "\"fmt\" imported and not used"
+			},
+			{
+				"line": 5,
+				"column": 2,
+				"error": "\"io\" imported and not used"
+			},
+			{
+				"line": 6,
+				"column": 2,
+				"error": "\"regexp\" imported and not used"
+			},
+			{
+				"line": 7,
+				"column": 2,
+				"error": "\"strings\" imported and not used"
+			},
+			{
+				"line": 8,
+				"column": 2,
+				"error": "\"time\" imported and not used"
+			},
+			{
+				"line": 10,
+				"column": 2,
+				"error": "\"github.com/gdamore/tcell/v2\" imported as tcell and not used"
+			},
+			{
+				"line": 11,
+				"column": 2,
+				"error": "\"github.com/rivo/tview\" imported and not used"
+			},
+			{
+				"line": 13,
+				"column": 2,
+				"error": "\"devops-dashboard/internal/docker\" imported and not used"
+			},
+			{
+				"line": 14,
+				"column": 2,
+				"error": "expected ';', found yellow"
+			},
+			{
+				"line": 14,
+				"column": 27,
+				"error": "string literal not terminated"
+			},
+			{
+				"line": 67,
+				"column": 2,
+				"error": "expected declaration, found updateStats"
+			}
+		],
+		"/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/bulkOperation.go": [
+			{
+				"line": 83,
+				"column": 3,
+				"error": "undefined: showMessage"
+			},
+			{
+				"line": 127,
+				"column": 3,
+				"error": "undefined: showMessage"
+			},
+			{
+				"line": 303,
+				"column": 3,
+				"error": "undefined: showMessage"
+			}
+		],
+		"/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/dashboard.go": [
+			{
+				"line": 266,
+				"column": 4,
+				"error": "undefined: ShowAdvancedLogs"
+			},
+			{
+				"line": 522,
+				"column": 5,
+				"error": "undefined: showMessage"
+			},
+			{
+				"line": 535,
+				"column": 5,
+				"error": "undefined: showMessage"
+			},
+			{
+				"line": 537,
+				"column": 5,
+				"error": "undefined: showMessage"
+			},
+			{
+				"line": 545,
+				"column": 2,
+				"error": "undefined: showConfirmation"
+			},
+			{
+				"line": 552,
+				"column": 7,
+				"error": "undefined: showMessage"
+			},
+			{
+				"line": 571,
+				"column": 5,
+				"error": "undefined: showMessage"
+			},
+			{
+				"line": 584,
+				"column": 4,
+				"error": "undefined: showMessage"
+			},
+			{
+				"line": 590,
+				"column": 2,
+				"error": "undefined: showMessage"
+			}
+		],
+		"/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/shell.go": [
+			{
+				"line": 352,
+				"column": 6,
+				"error": "undefined: showMessage"
+			},
+			{
+				"line": 368,
+				"column": 2,
+				"error": "undefined: showMessage"
+			}
+		]
+	},
+	"Issues": [
+		{
+			"severity": "HIGH",
+			"confidence": "MEDIUM",
+			"cwe": {
+				"id": "190",
+				"url": "https://cwe.mitre.org/data/definitions/190.html"
+			},
+			"rule_id": "G115",
+			"details": "integer overflow conversion uint64 -\u003e int",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/docker/dockerEnhacemnet.go",
+			"code": "250: \t// Process Metrics\n251: \tmetrics.ProcessStats.ProcessCount = int(containerStats.PidsStats.Current)\n252: \n",
+			"line": "251",
+			"column": "41",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/showlogs.go",
+			"code": "68: \n69: \t\tio.Copy(logView, reader)\n70: \t}()\n",
+			"line": "69",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/showStats.go",
+			"code": "237: \t\tfmt.Sscanf(stats.CPUPerc, \"%f%%\", \u0026cpuVal)\n238: \t\tfmt.Sscanf(stats.MemPerc, \"%f%%\", \u0026memVal)\n239: \n",
+			"line": "238",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/showStats.go",
+			"code": "236: \t\tvar cpuVal, memVal float64\n237: \t\tfmt.Sscanf(stats.CPUPerc, \"%f%%\", \u0026cpuVal)\n238: \t\tfmt.Sscanf(stats.MemPerc, \"%f%%\", \u0026memVal)\n",
+			"line": "237",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/dashboard.go",
+			"code": "553: \t\t\t\t\t} else {\n554: \t\t\t\t\t\td.updateList()\n555: \t\t\t\t\t}\n",
+			"line": "554",
+			"column": "7",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/dashboard.go",
+			"code": "537: \t\t\t\tshowMessage(d.app, d.mainFlex, \"✅ Success\", \"Container restarted!\")\n538: \t\t\t\td.updateList()\n539: \t\t\t}\n",
+			"line": "538",
+			"column": "5",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/dashboard.go",
+			"code": "523: \t\t\t} else {\n524: \t\t\t\td.updateList()\n525: \t\t\t}\n",
+			"line": "524",
+			"column": "5",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/dashboard.go",
+			"code": "398: \tfmt.Sscanf(stats.CPUPerc, \"%f%%\", \u0026cpuVal)\n399: \tfmt.Sscanf(stats.MemPerc, \"%f%%\", \u0026memVal)\n400: \n",
+			"line": "399",
+			"column": "2",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/dashboard.go",
+			"code": "397: \tvar cpuVal, memVal float64\n398: \tfmt.Sscanf(stats.CPUPerc, \"%f%%\", \u0026cpuVal)\n399: \tfmt.Sscanf(stats.MemPerc, \"%f%%\", \u0026memVal)\n",
+			"line": "398",
+			"column": "2",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/dashboard.go",
+			"code": "372: \t\t\t\td.app.QueueUpdateDraw(func() {\n373: \t\t\t\t\td.updateList()\n374: \t\t\t\t})\n",
+			"line": "373",
+			"column": "6",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/dashboard.go",
+			"code": "316: \t\tif event.Key() == tcell.KeyF5 {\n317: \t\t\td.updateList()\n318: \t\t\treturn nil\n",
+			"line": "317",
+			"column": "4",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/dashboard.go",
+			"code": "309: \t\t\t\td.bulkMode.ToggleContainer(container.ID)\n310: \t\t\t\td.updateList()\n311: \t\t\t\td.showBulkModeInfo()\n",
+			"line": "310",
+			"column": "5",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/dashboard.go",
+			"code": "303: \t\t\t\td.mu.RUnlock()\n304: \t\t\t\tShowBulkActionsMenu(d.app, d.mainFlex, d.bulkMode, containers, func() { d.updateList() })\n305: \t\t\t}\n",
+			"line": "304",
+			"column": "77",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/dashboard.go",
+			"code": "293: \t\t\td.bulkMode.Toggle()\n294: \t\t\td.updateList()\n295: \t\t\tif d.bulkMode.IsEnabled() {\n",
+			"line": "294",
+			"column": "4",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/ui/dashboard/dashboard.go",
+			"code": "241: \t\t\t\td.bulkMode.Toggle()\n242: \t\t\t\td.updateList()\n243: \t\t\t}\n",
+			"line": "242",
+			"column": "5",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/docker/exec.go",
+			"code": "136: \tif err != nil {\n137: \t\tcli.Close()\n138: \t\treturn nil, nil, nil, fmt.Errorf(\"failed to attach to exec: %w\", err)\n",
+			"line": "137",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/home/choice/Downloads/Projects/devops-dashboard-2/internal/docker/exec.go",
+			"code": "128: \tif err != nil {\n129: \t\tcli.Close()\n130: \t\treturn nil, nil, nil, fmt.Errorf(\"failed to create exec: %w\", err)\n",
+			"line": "129",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		}
+	],
+	"Stats": {
+		"files": 12,
+		"lines": 3452,
+		"nosec": 0,
+		"found": 17
+	},
+	"GosecVersion": "dev"
+}
