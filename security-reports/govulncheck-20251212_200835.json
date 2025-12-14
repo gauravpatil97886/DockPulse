@@ -1,0 +1,17 @@
+{
+  "config": {
+    "protocol_version": "v1.0.0",
+    "scanner_name": "govulncheck",
+    "scanner_version": "v0.0.0-a7188c690e1d-20240415194721",
+    "db": "https://vuln.go.dev",
+    "db_last_modified": "2025-12-09T17:20:47Z",
+    "scan_level": "symbol",
+    "scan_mode": "source"
+  }
+}
+govulncheck: no go.mod file
+
+govulncheck only works with Go modules. Try navigating to your module directory.
+Otherwise, run go mod init to make your project a module.
+
+See https://go.dev/doc/modules/managing-dependencies for more information.
